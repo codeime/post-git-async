@@ -280,8 +280,8 @@ __posh_git_echo_sync () {
         fi
     else
         if [ -d "$g/rebase-apply" ]; then
-            step=$(cat "$g/rebase-apply/next")
-            total=$(cat "$g/rebase-apply/last")
+            step=$(cat "$g/rebase-apply/next" 2>/dev/null)
+            total=$(cat "$g/rebase-apply/last" 2>/dev/null)
             if [ -f "$g/rebase-apply/rebasing" ]; then
                 rebase='|REBASE'
             elif [ -f "$g/rebase-apply/applying" ]; then
@@ -358,7 +358,7 @@ __posh_git_echo_sync () {
         local filesModified=0
         local filesDeleted=0
         local filesUnmerged=0
-        while IFS="\n" read -r tag rest
+        while IFS=$'\n' read -r tag rest
         do
             case "${tag:0:1}" in
                 A )
@@ -469,7 +469,7 @@ __posh_git_echo_sync () {
 
         local localStatusSymbol=$LocalDefaultStatusSymbol
         local localStatusColor=$DefaultForegroundColor
-       
+
         if (( workingCount != 0 )); then
             localStatusSymbol=$LocalWorkingStatusSymbol
             localStatusColor=$LocalWorkingStatusColor
@@ -611,6 +611,7 @@ __posh_git_ps1_upstream_divergence ()
 
 _posh_git_result=""
 _posh_git_job_pid=0
+_posh_git_fd=-1
 
 __posh_git_echo() {
     echo "$_posh_git_result"
@@ -621,24 +622,23 @@ _posh_git_on_ready() {
     IFS= read -r -u $fd _posh_git_result
     zle -F $fd
     exec {fd}<&-
-    _posh_git_job_pid=0
-    zle reset-prompt
+    # Only clear the job pid when the completed fd matches the current one,
+    # preventing a stale callback from zeroing out a newer job's pid.
+    (( fd == _posh_git_fd )) && _posh_git_job_pid=0
+    [[ -o zle ]] && zle reset-prompt
 }
 
 _posh_git_async_refresh() {
-    (( _posh_git_job_pid )) && kill $_posh_git_job_pid 2>/dev/null
-    exec {_posh_git_fd}< <(__posh_git_echo_sync; echo)
+    # Explicitly clean up the previous job before starting a new one.
+    # The if-guard ensures _posh_git_fd is always valid when we touch it here.
+    if (( _posh_git_job_pid )); then
+        kill $_posh_git_job_pid 2>/dev/null
+        zle -F $_posh_git_fd 2>/dev/null
+        exec {_posh_git_fd}<&-
+    fi
+    exec {_posh_git_fd}< <(__posh_git_echo_sync 2>/dev/null; echo)
     _posh_git_job_pid=$!
     zle -F $_posh_git_fd _posh_git_on_ready
-}
-
-_posh_git_on_ready() {
-    local fd=$1
-    IFS= read -r -u $fd _posh_git_result
-    zle -F $fd
-    exec {fd}<&-
-    _posh_git_job_pid=0
-    zle reset-prompt
 }
 
 autoload -Uz add-zsh-hook
