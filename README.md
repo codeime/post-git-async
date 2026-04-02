@@ -14,7 +14,7 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 
 - 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
 - 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
-- 在当前 shell 内按仓库跟踪 in-flight 异步任务，避免同一仓库连续回车时重复重启后台查询
+- 当前 shell 内会复用同一仓库的 in-flight 异步任务，避免连续回车时重复重启后台查询
 - 常规仓库路径会尽量避免重复的 `symbolic-ref` / `rev-parse` / `config` 调用
 
 ## 原理
@@ -32,6 +32,7 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 
 - 优先走 `git status --porcelain=v2 --branch -z`
 - 当 `bash.enableFileStatus=false` 时，跳过 `git status` 文件扫描，改走更轻的分支状态路径
+- stash 状态会优先走一次更快的计数路径，失败时再自动回退到兼容逻辑
 - 在旧版 Git 上自动回退到兼容路径
 - 离开 Git 仓库时清空显示，避免残留上一个仓库的状态
 
@@ -55,7 +56,7 @@ cp /path/to/posh-git-async/LICENSE ~/.oh-my-zsh/custom/plugins/posh-git-async/
 
 **2. 修改 `~/.zshrc`**
 
-如果从 [posh-git-sh](https://github.com/lyze/posh-git-sh) 迁移，移除原有的 `source ~/git-prompt.sh`，在 plugins 列表中添加插件：
+如果从 [posh-git-sh](https://github.com/lyze/posh-git-sh) 或你之前的本地同步脚本迁移，移除原有的 `source ~/git-prompt.sh`，在 plugins 列表中添加插件：
 
 ```zsh
 plugins=(
@@ -153,13 +154,15 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 **可能原因**：
 
 - 主题文件未正确修改为调用 `$(__posh_git_echo)`
+- 主题仍在使用 `$(git_prompt_info)`，而插件已经默认禁用了 oh-my-zsh 内置 git prompt
 - 不在 git 仓库目录中
 
 **解决方法**：
 
 1. 检查主题文件是否正确使用 `$(__posh_git_echo)`
-2. 在 git 仓库目录中测试：`cd /path/to/git/repo`
-3. 手动测试：在终端执行 `__posh_git_echo_sync`，查看是否有输出
+2. 如果你确实要保留 `$(git_prompt_info)`，请在 `source $ZSH/oh-my-zsh.sh` 之前设置 `POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false`
+3. 在 git 仓库目录中测试：`cd /path/to/git/repo`
+4. 手动测试：在终端执行 `__posh_git_echo_sync`，查看是否有输出
 
 ### prompt 显示错误信息或乱码
 
@@ -179,7 +182,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 ### 切换目录后显示错误的 git 状态
 
-**说明**：短暂显示旧状态是异步 prompt 的正常现象，但当前实现已经避免了把旧仓库的后台结果覆盖到新仓库 prompt 上。通常下一次异步完成后会更新为正确状态。
+**说明**：当前实现会避免把旧仓库的后台结果覆盖到新仓库 prompt 上。切换到另一个仓库后，如果 git 区域短暂为空，等异步查询完成后就会显示新仓库状态。
 
 ### 多个终端同时打开时为什么不会共享状态
 
@@ -193,7 +196,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 ## 注意
 
 - 首次打开终端时 git 信息为空，第一次异步完成后才显示
-- 切换目录后 prompt 会短暂显示上一个目录的 git 状态，异步刷新后更新
+- 切换到另一个仓库后，git 区域可能会短暂为空，异步刷新后更新
 - 当前 prompt 结果和异步任务只存在于当前 shell 内存中，不会跨终端共享
 - 如果你使用“复制文件”安装方式，仓库里的后续修改不会自动同步到 `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
