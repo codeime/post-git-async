@@ -208,10 +208,63 @@ __posh_git_tally_xy () {
     esac
 }
 
+__posh_git_parse_bool () {
+    case "$1" in
+        [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss] | [Oo][Nn] | 1)
+            REPLY=true
+            ;;
+        [Ff][Aa][Ll][Ss][Ee] | [Nn][Oo] | [Oo][Ff][Ff] | 0)
+            REPLY=false
+            ;;
+        *)
+            REPLY=$2
+            ;;
+    esac
+}
+
 # Echoes the git status string.
 __posh_git_echo_sync () {
-    if [ "$(__posh_git config --bool bash.enableGitStatus)" = 'false' ]; then
-        return;
+    local config_output=
+    local config_key=
+    local config_value=
+    local EnableGitStatus=true
+    local BranchBehindAndAheadDisplay=full
+    local EnableFileStatus=true
+    local ShowStatusWhenZero=false
+    local EnableStashStatus=true
+    local EnableStatusSymbol=true
+
+    config_output=$(__posh_git config -z --get-regexp '^bash\.(enablegitstatus|branchbehindandaheaddisplay|enablefilestatus|showstatuswhenzero|enablestashstatus|enablestatussymbol)$' 2>/dev/null | tr '\0' '\n')
+    while IFS= read -r config_key && IFS= read -r config_value; do
+        case "$config_key" in
+            bash.enablegitstatus)
+                __posh_git_parse_bool "$config_value" true
+                EnableGitStatus=$REPLY
+                ;;
+            bash.branchbehindandaheaddisplay)
+                BranchBehindAndAheadDisplay=$config_value
+                ;;
+            bash.enablefilestatus)
+                __posh_git_parse_bool "$config_value" true
+                EnableFileStatus=$REPLY
+                ;;
+            bash.showstatuswhenzero)
+                __posh_git_parse_bool "$config_value" false
+                ShowStatusWhenZero=$REPLY
+                ;;
+            bash.enablestashstatus)
+                __posh_git_parse_bool "$config_value" true
+                EnableStashStatus=$REPLY
+                ;;
+            bash.enablestatussymbol)
+                __posh_git_parse_bool "$config_value" true
+                EnableStatusSymbol=$REPLY
+                ;;
+        esac
+    done <<< "$config_output"
+
+    if ! $EnableGitStatus; then
+        return
     fi
 
     local Red='\033[0;31m'
@@ -267,36 +320,6 @@ __posh_git_echo_sync () {
 
     local RebaseForegroundColor=$(__posh_color '\e[0m') # reset
     local RebaseBackgroundColor=
-
-    local BranchBehindAndAheadDisplay=$(__posh_git config --get bash.branchBehindAndAheadDisplay)
-    if [ -z "$BranchBehindAndAheadDisplay" ]; then
-        BranchBehindAndAheadDisplay="full"
-    fi
-
-    local EnableFileStatus=$(__posh_git config --bool bash.enableFileStatus)
-    case "$EnableFileStatus" in
-        true)  EnableFileStatus=true ;;
-        false) EnableFileStatus=false ;;
-        *)     EnableFileStatus=true ;;
-    esac
-    local ShowStatusWhenZero=$(__posh_git config --bool bash.showStatusWhenZero)
-    case "$ShowStatusWhenZero" in
-        true)  ShowStatusWhenZero=true ;;
-        false) ShowStatusWhenZero=false ;;
-        *)     ShowStatusWhenZero=false ;;
-    esac
-    local EnableStashStatus=$(__posh_git config --bool bash.enableStashStatus)
-    case "$EnableStashStatus" in
-        true)  EnableStashStatus=true ;;
-        false) EnableStashStatus=false ;;
-        *)     EnableStashStatus=true ;;
-    esac
-    local EnableStatusSymbol=$(__posh_git config --bool bash.enableStatusSymbol)
-    case "$EnableStatusSymbol" in
-        true)  EnableStatusSymbol=true ;;
-        false) EnableStatusSymbol=false ;;
-        *)     EnableStatusSymbol=true ;;
-    esac
 
     local BranchIdenticalStatusSymbol=''
     local BranchAheadStatusSymbol=''
@@ -368,18 +391,27 @@ __posh_git_echo_sync () {
     local inside_git_dir=false
     local inside_work_tree=false
     local is_bare_repo=false
+    local repo_state_output=
+    local repo_state_value=
+    local repo_state_index=0
 
     __posh_git_reset_counters
 
-    if [ 'true' = "$(__posh_git rev-parse --is-inside-git-dir 2>/dev/null)" ]; then
-        inside_git_dir=true
-    fi
-    if [ 'true' = "$(__posh_git rev-parse --is-bare-repository 2>/dev/null)" ]; then
-        is_bare_repo=true
-    fi
-    if [ 'true' = "$(__posh_git rev-parse --is-inside-work-tree 2>/dev/null)" ]; then
-        inside_work_tree=true
-    fi
+    repo_state_output=$(__posh_git rev-parse --is-inside-git-dir --is-bare-repository --is-inside-work-tree 2>/dev/null)
+    while IFS= read -r repo_state_value; do
+        (( repo_state_index++ ))
+        case "$repo_state_index:$repo_state_value" in
+            1:true)
+                inside_git_dir=true
+                ;;
+            2:true)
+                is_bare_repo=true
+                ;;
+            3:true)
+                inside_work_tree=true
+                ;;
+        esac
+    done <<< "$repo_state_output"
 
     if $inside_work_tree && __posh_git_supports_status_v2; then
         local status_cmd=(status --porcelain=v2 --branch -z)

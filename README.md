@@ -14,7 +14,7 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 
 - 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
 - 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
-- 在当前 shell 内按仓库跟踪异步任务，避免同一仓库连续回车时重复重启后台查询
+- 在当前 shell 内按仓库跟踪 in-flight 异步任务，避免同一仓库连续回车时重复重启后台查询
 
 ## 原理
 
@@ -177,7 +177,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 ### 多个终端同时打开时为什么不会共享状态
 
-**说明**：插件只在当前 shell 进程内缓存和复用异步结果，不会在多个终端之间共享状态。
+**说明**：插件只在当前 shell 进程内维护当前 prompt 结果和 in-flight 异步任务，不会在多个终端之间共享状态。
 
 **影响**：
 
@@ -188,7 +188,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 - 首次打开终端时 git 信息为空，第一次异步完成后才显示
 - 切换目录后 prompt 会短暂显示上一个目录的 git 状态，异步刷新后更新
-- 缓存和异步任务只存在于当前 shell 内存中，不会跨终端共享
+- 当前 prompt 结果和异步任务只存在于当前 shell 内存中，不会跨终端共享
 - 如果你使用“复制文件”安装方式，仓库里的后续修改不会自动同步到 `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
 ## 许可证
