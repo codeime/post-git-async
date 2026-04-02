@@ -15,6 +15,7 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 - 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
 - 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
 - 在当前 shell 内按仓库跟踪 in-flight 异步任务，避免同一仓库连续回车时重复重启后台查询
+- 常规仓库路径会尽量避免重复的 `symbolic-ref` / `rev-parse` / `config` 调用
 
 ## 原理
 
@@ -30,6 +31,7 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 为了降低热路径开销，当前实现会：
 
 - 优先走 `git status --porcelain=v2 --branch -z`
+- 当 `bash.enableFileStatus=false` 时，跳过 `git status` 文件扫描，改走更轻的分支状态路径
 - 在旧版 Git 上自动回退到兼容路径
 - 离开 Git 仓库时清空显示，避免残留上一个仓库的状态
 
@@ -170,6 +172,10 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 1. 检查 git 是否正常工作：`git status`
 2. 临时禁用插件测试：从 plugins 列表中移除后 `source ~/.zshrc`
+
+### 关闭文件状态后为什么 prompt 会更快
+
+**说明**：当你设置 `git config bash.enableFileStatus false` 时，插件当前会跳过 `git status` 文件扫描，不再统计 staged / unstaged 文件数量，只保留分支、ahead/behind、stash 等较轻的状态信息。
 
 ### 切换目录后显示错误的 git 状态
 

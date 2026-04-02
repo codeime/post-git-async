@@ -376,8 +376,6 @@ __posh_git_echo_sync () {
         elif [ -f "$g/BISECT_LOG" ]; then
             rebase='|BISECTING'
         fi
-
-        b=$(__posh_git_resolve_ref "$g")
     fi
 
     if [ -n "$step" ] && [ -n "$total" ]; then
@@ -413,7 +411,19 @@ __posh_git_echo_sync () {
         esac
     done <<< "$repo_state_output"
 
-    if $inside_work_tree && __posh_git_supports_status_v2; then
+    if ! $EnableFileStatus; then
+        if $inside_work_tree; then
+            if $EnableStashStatus; then
+                __posh_git rev-parse --verify refs/stash >/dev/null 2>&1 && hasStash=true
+                if $hasStash; then
+                    stashCount=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null)
+                    stashCount=${stashCount:-0}
+                fi
+            fi
+            __posh_git_ps1_upstream_divergence
+            divergence_return_code=$?
+        fi
+    elif $inside_work_tree && __posh_git_supports_status_v2; then
         local status_cmd=(status --porcelain=v2 --branch -z)
         local status_record=
         local branch_head=
@@ -421,9 +431,6 @@ __posh_git_echo_sync () {
 
         if $EnableStashStatus && __posh_git_supports_show_stash; then
             status_cmd+=(--show-stash)
-        fi
-        if ! $EnableFileStatus; then
-            status_cmd+=(--untracked-files=no)
         fi
 
         while IFS= read -r -d '' status_record; do
@@ -449,20 +456,14 @@ __posh_git_echo_sync () {
                     hasStash=true
                     ;;
                 '1 '* | 'u '*)
-                    if $EnableFileStatus; then
-                        __posh_git_tally_xy "${status_record[3,4]}"
-                    fi
+                    __posh_git_tally_xy "${status_record[3,4]}"
                     ;;
                 '2 '*)
-                    if $EnableFileStatus; then
-                        __posh_git_tally_xy "${status_record[3,4]}"
-                    fi
+                    __posh_git_tally_xy "${status_record[3,4]}"
                     IFS= read -r -d '' -u 0 _posh_git_orig_path_unused
                     ;;
                 \?\ *)
-                    if $EnableFileStatus; then
-                        (( __POSH_FILES_ADDED++ ))
-                    fi
+                    (( __POSH_FILES_ADDED++ ))
                     ;;
             esac
         done < <(__posh_git "${status_cmd[@]}" 2>/dev/null)
