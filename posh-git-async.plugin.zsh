@@ -87,6 +87,7 @@ if [ -n "$ZSH_VERSION" ]; then
         (( $+functions[git_prompt_status] )) && git_prompt_status() { :; }
         (( $+functions[git_prompt_ahead] )) && git_prompt_ahead() { :; }
     fi
+    zmodload zsh/datetime 2>/dev/null || true
 fi
 
 __posh_git_detect_status_features () {
@@ -769,11 +770,50 @@ _posh_git_job_pid=0
 _posh_git_fd=-1
 _posh_git_job_key=""
 _posh_git_display_key=""
+_posh_git_refresh_pending=false
+_posh_git_refresh_deferred=false
+typeset -gF _posh_git_job_started_at=0
+typeset -gF _posh_git_last_refresh_at=0
+typeset -gF _posh_git_last_completed_at=0
+_posh_git_last_completed_key=""
+
+: ${POSH_GIT_ASYNC_DEBOUNCE_SECONDS:=0.25}
+: ${POSH_GIT_ASYNC_TIMEOUT_SECONDS:=5}
 
 _posh_git_repo_key() {
     local g=$(__posh_gitdir)
     [ -z "$g" ] && return
     print -r -- "${g:A}"
+}
+
+_posh_git_now() {
+    print -r -- "${EPOCHREALTIME:-0}"
+}
+
+_posh_git_cancel_job() {
+    if (( _posh_git_job_pid )); then
+        kill $_posh_git_job_pid 2>/dev/null
+    fi
+    if (( _posh_git_fd >= 0 )); then
+        zle -F $_posh_git_fd 2>/dev/null
+        exec {_posh_git_fd}<&-
+    fi
+    _posh_git_job_pid=0
+    _posh_git_fd=-1
+    _posh_git_job_key=""
+    _posh_git_refresh_pending=false
+    _posh_git_refresh_deferred=false
+    _posh_git_job_started_at=0
+}
+
+_posh_git_start_job() {
+    local job_key=$1
+    exec {_posh_git_fd}< <(print -r -- "$job_key"; __posh_git_echo_sync 2>/dev/null; echo)
+    _posh_git_job_pid=$!
+    _posh_git_job_key=$job_key
+    _posh_git_job_started_at=$(_posh_git_now)
+    _posh_git_last_refresh_at=$_posh_git_job_started_at
+    zle -F $_posh_git_fd _posh_git_on_ready
 }
 
 __posh_git_echo() {
@@ -786,6 +826,9 @@ _posh_git_on_ready() {
     local fd=$1
     local result_key
     local next_result
+    local now
+    local should_reset=false
+
     IFS= read -r -u $fd result_key
     IFS= read -r -u $fd next_result
     zle -F $fd
@@ -794,29 +837,47 @@ _posh_git_on_ready() {
     # preventing a stale callback from zeroing out a newer job's pid.
     if (( fd == _posh_git_fd )); then
         _posh_git_job_pid=0
+        _posh_git_fd=-1
         _posh_git_job_key=""
+        _posh_git_job_started_at=0
     fi
+    now=$(_posh_git_now)
+    _posh_git_last_completed_at=$now
+    _posh_git_last_completed_key=$result_key
+
     if [ "$result_key" = "$_posh_git_display_key" ] && [[ $next_result != $_posh_git_result || $result_key != $_posh_git_result_key ]]; then
         _posh_git_result=$next_result
         _posh_git_result_key=$result_key
+        if [ "$_posh_git_refresh_pending" = true ]; then
+            _posh_git_refresh_deferred=true
+        else
+            should_reset=true
+        fi
+    fi
+
+    if [ "$_posh_git_refresh_pending" = true ] && [ "$result_key" = "$_posh_git_display_key" ]; then
+        _posh_git_refresh_pending=false
+        _posh_git_start_job "$result_key"
+    elif [ "$_posh_git_refresh_deferred" = true ] && [ "$result_key" = "$_posh_git_display_key" ]; then
+        _posh_git_refresh_deferred=false
+        should_reset=true
+    fi
+
+    if $should_reset; then
         [[ -o zle ]] && zle reset-prompt
     fi
 }
 
 _posh_git_async_refresh() {
     local next_key=$(_posh_git_repo_key)
+    local now=$(_posh_git_now)
     _posh_git_display_key=$next_key
 
     if [ -z "$next_key" ]; then
-        if (( _posh_git_job_pid )); then
-            kill $_posh_git_job_pid 2>/dev/null
-            zle -F $_posh_git_fd 2>/dev/null
-            exec {_posh_git_fd}<&-
-            _posh_git_job_pid=0
-            _posh_git_job_key=""
-        fi
+        _posh_git_cancel_job
         _posh_git_result=""
         _posh_git_result_key=""
+        _posh_git_refresh_deferred=false
         return
     fi
 
@@ -824,23 +885,28 @@ _posh_git_async_refresh() {
         _posh_git_result=""
     fi
 
-    if (( _posh_git_job_pid )) && [ "$_posh_git_job_key" = "$next_key" ]; then
+    if (( _posh_git_job_pid )); then
+        if (( now > 0 )) && (( _posh_git_job_started_at > 0 )) && (( now - _posh_git_job_started_at >= POSH_GIT_ASYNC_TIMEOUT_SECONDS )); then
+            _posh_git_cancel_job
+        elif [ "$_posh_git_job_key" = "$next_key" ]; then
+            if (( now == 0 )) || (( _posh_git_last_refresh_at == 0 )) || (( now - _posh_git_last_refresh_at >= POSH_GIT_ASYNC_DEBOUNCE_SECONDS )); then
+                _posh_git_refresh_pending=true
+                _posh_git_last_refresh_at=$now
+            fi
+            return
+        else
+            _posh_git_cancel_job
+        fi
+    fi
+
+    if (( now > 0 )) \
+        && (( _posh_git_last_completed_at > 0 )) \
+        && [ "$_posh_git_last_completed_key" = "$next_key" ] \
+        && (( now - _posh_git_last_completed_at < POSH_GIT_ASYNC_DEBOUNCE_SECONDS )); then
         return
     fi
 
-    # Explicitly clean up the previous job before starting a new one.
-    # The if-guard ensures _posh_git_fd is always valid when we touch it here.
-    if (( _posh_git_job_pid )); then
-        kill $_posh_git_job_pid 2>/dev/null
-        zle -F $_posh_git_fd 2>/dev/null
-        exec {_posh_git_fd}<&-
-        _posh_git_job_pid=0
-        _posh_git_job_key=""
-    fi
-    exec {_posh_git_fd}< <(print -r -- "$next_key"; __posh_git_echo_sync 2>/dev/null; echo)
-    _posh_git_job_pid=$!
-    _posh_git_job_key=$next_key
-    zle -F $_posh_git_fd _posh_git_on_ready
+    _posh_git_start_job "$next_key"
 }
 
 autoload -Uz add-zsh-hook
