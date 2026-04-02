@@ -10,6 +10,12 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 
 将 [posh-git-sh](https://github.com/lyze/posh-git-sh) 的 git prompt 改造为异步非阻塞版本，解决在大型仓库中按回车后 prompt 卡顿的问题。
 
+当前版本还额外做了几项热路径优化：
+
+- 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
+- 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
+- 在当前 shell 内按仓库跟踪异步任务，避免同一仓库连续回车时重复重启后台查询
+
 ## 原理
 
 原版 `__posh_git_echo` 每次渲染 prompt 时同步执行多个 git 命令（`git status`、`git rev-list` 等），在大型仓库中耗时明显。
@@ -17,8 +23,15 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 本插件将其改为：
 
 1. prompt 立即渲染，显示上一次缓存的 git 状态
-2. 后台异步执行 git 查询
-3. 查询完成后自动刷新 prompt
+2. 同一仓库有未完成的后台查询时，后续 `precmd` 会直接复用，不重复启动
+3. 切换到其他仓库时，旧仓库的后台查询会被取消
+4. 查询完成后只在结果真的变化时刷新 prompt
+
+为了降低热路径开销，当前实现会：
+
+- 优先走 `git status --porcelain=v2 --branch -z`
+- 在旧版 Git 上自动回退到兼容路径
+- 离开 Git 仓库时清空显示，避免残留上一个仓库的状态
 
 ## 安装
 
@@ -30,6 +43,12 @@ git clone thisRepoUrl ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 # 方式二：本地安装（开发或测试）
 ln -s /path/to/posh-git-async ~/.oh-my-zsh/custom/plugins/posh-git-async
+
+# 方式三：直接复制文件（不使用软链）
+mkdir -p ~/.oh-my-zsh/custom/plugins/posh-git-async
+cp /path/to/posh-git-async/posh-git-async.plugin.zsh ~/.oh-my-zsh/custom/plugins/posh-git-async/
+cp /path/to/posh-git-async/README.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
+cp /path/to/posh-git-async/LICENSE ~/.oh-my-zsh/custom/plugins/posh-git-async/
 ```
 
 **2. 修改 `~/.zshrc`**
@@ -88,6 +107,11 @@ source ~/.zshrc
 - zsh 4.3.11 或更高版本（需要 `zle -F` 支持）
 - oh-my-zsh
 - git
+
+备注：
+
+- 较新的 Git 版本会优先使用 `porcelain v2` 路径，性能更好
+- 较旧的 Git 版本会自动回退到兼容逻辑，但状态采集可能稍重
 
 ## 卸载
 
@@ -149,12 +173,23 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 ### 切换目录后显示错误的 git 状态
 
-**说明**：这是正常行为。插件会短暂显示上一个目录的缓存状态，异步刷新完成后（通常 < 1 秒）会自动更新为正确状态。
+**说明**：短暂显示旧状态是异步 prompt 的正常现象，但当前实现已经避免了把旧仓库的后台结果覆盖到新仓库 prompt 上。通常下一次异步完成后会更新为正确状态。
+
+### 多个终端同时打开时为什么不会共享状态
+
+**说明**：插件只在当前 shell 进程内缓存和复用异步结果，不会在多个终端之间共享状态。
+
+**影响**：
+
+- 优点：实现简单，不写临时文件，也不会引入跨终端缓存一致性问题
+- 限制：如果你同时打开很多终端并进入同一个大型仓库，每个终端仍会各自执行后台 Git 查询
 
 ## 注意
 
 - 首次打开终端时 git 信息为空，第一次异步完成后才显示
 - 切换目录后 prompt 会短暂显示上一个目录的 git 状态，异步刷新后更新
+- 缓存和异步任务只存在于当前 shell 内存中，不会跨终端共享
+- 如果你使用“复制文件”安装方式，仓库里的后续修改不会自动同步到 `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
 ## 许可证
 
