@@ -80,6 +80,15 @@ __posh_git () {
     GIT_OPTIONAL_LOCKS=0 command git "$@"
 }
 
+if [ -n "$ZSH_VERSION" ]; then
+    : ${POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT:=true}
+    if [ "$POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT" = true ]; then
+        (( $+functions[git_prompt_info] )) && git_prompt_info() { :; }
+        (( $+functions[git_prompt_status] )) && git_prompt_status() { :; }
+        (( $+functions[git_prompt_ahead] )) && git_prompt_ahead() { :; }
+    fi
+fi
+
 __posh_git_detect_status_features () {
     if [ -z "${_POSH_GIT_STATUS_FEATURES_DETECTED-}" ]; then
         local status_help
@@ -115,6 +124,29 @@ __posh_git_supports_status_v2 () {
 __posh_git_supports_show_stash () {
     __posh_git_detect_status_features
     [ "$_POSH_GIT_SUPPORTS_SHOW_STASH" = true ]
+}
+
+__posh_git_stash_info () {
+    local stash_count
+
+    if stash_count=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null); then
+        stash_count=${stash_count:-0}
+        if [ "$stash_count" -gt 0 ] 2>/dev/null; then
+            echo "true:$stash_count"
+        else
+            echo "false:0"
+        fi
+        return 0
+    fi
+
+    __posh_git rev-parse --verify refs/stash >/dev/null 2>&1 || {
+        echo "false:0"
+        return 0
+    }
+
+    stash_count=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null)
+    stash_count=${stash_count:-0}
+    echo "true:$stash_count"
 }
 
 __posh_git_describe_detached () {
@@ -392,6 +424,7 @@ __posh_git_echo_sync () {
     local repo_state_output=
     local repo_state_value=
     local repo_state_index=0
+    local stash_info=
 
     __posh_git_reset_counters
 
@@ -414,11 +447,9 @@ __posh_git_echo_sync () {
     if ! $EnableFileStatus; then
         if $inside_work_tree; then
             if $EnableStashStatus; then
-                __posh_git rev-parse --verify refs/stash >/dev/null 2>&1 && hasStash=true
-                if $hasStash; then
-                    stashCount=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null)
-                    stashCount=${stashCount:-0}
-                fi
+                stash_info=$(__posh_git_stash_info)
+                hasStash=${stash_info%%:*}
+                stashCount=${stash_info#*:}
             fi
             __posh_git_ps1_upstream_divergence
             divergence_return_code=$?
@@ -481,20 +512,16 @@ __posh_git_echo_sync () {
         fi
 
         if $EnableStashStatus && ! $hasStash && ! __posh_git_supports_show_stash; then
-            __posh_git rev-parse --verify refs/stash >/dev/null 2>&1 && hasStash=true
-            if $hasStash; then
-                stashCount=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null)
-                stashCount=${stashCount:-0}
-            fi
+            stash_info=$(__posh_git_stash_info)
+            hasStash=${stash_info%%:*}
+            stashCount=${stash_info#*:}
         fi
     else
         if $inside_work_tree; then
             if $EnableStashStatus; then
-                __posh_git rev-parse --verify refs/stash >/dev/null 2>&1 && hasStash=true
-                if $hasStash; then
-                    stashCount=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null)
-                    stashCount=${stashCount:-0}
-                fi
+                stash_info=$(__posh_git_stash_info)
+                hasStash=${stash_info%%:*}
+                stashCount=${stash_info#*:}
             fi
             __posh_git_ps1_upstream_divergence
             divergence_return_code=$?

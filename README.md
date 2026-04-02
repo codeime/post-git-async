@@ -77,22 +77,22 @@ local git_info='$(git_prompt_info)'
 local git_info='$(__posh_git_echo)'
 ```
 
-**4. （可选）禁用 oh-my-zsh 内置 git prompt**
+**4. oh-my-zsh 内置 git prompt 会默认被插件禁用**
 
-oh-my-zsh 自带的 git prompt 函数（`git_prompt_info` 等）与本插件功能重复，建议禁用。
+为了避免重复 Git 查询，插件加载后会默认把 `git_prompt_info`、`git_prompt_status` 和 `git_prompt_ahead` 覆盖为空实现。
 
-**推荐方法**：在 `~/.zshrc` 的 `source $ZSH/oh-my-zsh.sh` 之后手动覆盖函数：
+这意味着：
+
+- 如果你的主题已经改成使用 `$(__posh_git_echo)`，就不需要再手动禁用 oh-my-zsh 内置 git prompt
+- 如果你的主题还在使用 `$(git_prompt_info)`，git 区域会变空，所以请先按上一步改主题
+
+如果你确实想保留 oh-my-zsh 原生 git prompt，可以在 `source $ZSH/oh-my-zsh.sh` 之前设置：
 
 ```zsh
-source $ZSH/oh-my-zsh.sh
-
-# 禁用 oh-my-zsh 内置 git prompt，避免重复查询
-git_prompt_info()   { echo "" }
-git_prompt_status() { echo "" }
-git_prompt_ahead()  { echo "" }
+POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 ```
 
-**备选方法**：在 `~/.zshrc` 的 `source $ZSH/oh-my-zsh.sh` 之前添加（注意：这只会减少 untracked 文件检查，不会完全禁用内置 git prompt）：
+另外，你也可以继续在 `source $ZSH/oh-my-zsh.sh` 之前设置下面这个变量，减少 oh-my-zsh 原生 dirty 检查（注意：这不会完全禁用内置 git prompt）：
 
 ```zsh
 DISABLE_UNTRACKED_FILES_DIRTY="true"
