@@ -255,51 +255,266 @@ __posh_git_parse_bool () {
     esac
 }
 
-# Echoes the git status string.
-__posh_git_echo_sync () {
+__posh_git_load_config () {
     local config_output=
     local config_key=
     local config_value=
-    local EnableGitStatus=true
-    local BranchBehindAndAheadDisplay=full
-    local EnableFileStatus=true
-    local ShowStatusWhenZero=false
-    local EnableStashStatus=true
-    local EnableStatusSymbol=true
+
+    __POSH_CFG_ENABLE_GIT_STATUS=true
+    __POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY=full
+    __POSH_CFG_ENABLE_FILE_STATUS=true
+    __POSH_CFG_SHOW_STATUS_WHEN_ZERO=false
+    __POSH_CFG_ENABLE_STASH_STATUS=true
+    __POSH_CFG_ENABLE_STATUS_SYMBOL=true
 
     config_output=$(__posh_git config -z --get-regexp '^bash\.(enablegitstatus|branchbehindandaheaddisplay|enablefilestatus|showstatuswhenzero|enablestashstatus|enablestatussymbol)$' 2>/dev/null | tr '\0' '\n')
     while IFS= read -r config_key && IFS= read -r config_value; do
         case "$config_key" in
             bash.enablegitstatus)
                 __posh_git_parse_bool "$config_value" true
-                EnableGitStatus=$REPLY
+                __POSH_CFG_ENABLE_GIT_STATUS=$REPLY
                 ;;
             bash.branchbehindandaheaddisplay)
-                BranchBehindAndAheadDisplay=$config_value
+                __POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY=$config_value
                 ;;
             bash.enablefilestatus)
                 __posh_git_parse_bool "$config_value" true
-                EnableFileStatus=$REPLY
+                __POSH_CFG_ENABLE_FILE_STATUS=$REPLY
                 ;;
             bash.showstatuswhenzero)
                 __posh_git_parse_bool "$config_value" false
-                ShowStatusWhenZero=$REPLY
+                __POSH_CFG_SHOW_STATUS_WHEN_ZERO=$REPLY
                 ;;
             bash.enablestashstatus)
                 __posh_git_parse_bool "$config_value" true
-                EnableStashStatus=$REPLY
+                __POSH_CFG_ENABLE_STASH_STATUS=$REPLY
                 ;;
             bash.enablestatussymbol)
                 __posh_git_parse_bool "$config_value" true
-                EnableStatusSymbol=$REPLY
+                __POSH_CFG_ENABLE_STATUS_SYMBOL=$REPLY
                 ;;
         esac
     done <<< "$config_output"
+}
 
-    if ! $EnableGitStatus; then
+__posh_git_detect_rebase_state () {
+    local g=$1
+    local step=''
+    local total=''
+
+    __POSH_STATE_REBASE=''
+    __POSH_STATE_BRANCH=''
+    __POSH_STATE_BRANCH_OID=''
+
+    if [ -d "$g/rebase-merge" ]; then
+        __POSH_STATE_BRANCH=$(<"$g/rebase-merge/head-name" 2>/dev/null)
+        step=$(<"$g/rebase-merge/msgnum" 2>/dev/null)
+        total=$(<"$g/rebase-merge/end" 2>/dev/null)
+        if [ -f "$g/rebase-merge/interactive" ]; then
+            __POSH_STATE_REBASE='|REBASE-i'
+        else
+            __POSH_STATE_REBASE='|REBASE-m'
+        fi
+    elif [ -d "$g/rebase-apply" ]; then
+        step=$(<"$g/rebase-apply/next" 2>/dev/null)
+        total=$(<"$g/rebase-apply/last" 2>/dev/null)
+        if [ -f "$g/rebase-apply/rebasing" ]; then
+            __POSH_STATE_REBASE='|REBASE'
+        elif [ -f "$g/rebase-apply/applying" ]; then
+            __POSH_STATE_REBASE='|AM'
+        else
+            __POSH_STATE_REBASE='|AM/REBASE'
+        fi
+    elif [ -f "$g/MERGE_HEAD" ]; then
+        __POSH_STATE_REBASE='|MERGING'
+    elif [ -f "$g/CHERRY_PICK_HEAD" ]; then
+        __POSH_STATE_REBASE='|CHERRY-PICKING'
+    elif [ -f "$g/REVERT_HEAD" ]; then
+        __POSH_STATE_REBASE='|REVERTING'
+    elif [ -f "$g/BISECT_LOG" ]; then
+        __POSH_STATE_REBASE='|BISECTING'
+    fi
+
+    if [ -n "$step" ] && [ -n "$total" ]; then
+        __POSH_STATE_REBASE="$__POSH_STATE_REBASE $step/$total"
+    fi
+}
+
+__posh_git_detect_repo_context () {
+    local repo_state_output=
+    local repo_state_value=
+    local repo_state_index=0
+
+    __POSH_STATE_INSIDE_GIT_DIR=false
+    __POSH_STATE_INSIDE_WORK_TREE=false
+    __POSH_STATE_IS_BARE_REPO=false
+
+    repo_state_output=$(__posh_git rev-parse --is-inside-git-dir --is-bare-repository --is-inside-work-tree 2>/dev/null)
+    while IFS= read -r repo_state_value; do
+        (( repo_state_index++ ))
+        case "$repo_state_index:$repo_state_value" in
+            1:true)
+                __POSH_STATE_INSIDE_GIT_DIR=true
+                ;;
+            2:true)
+                __POSH_STATE_IS_BARE_REPO=true
+                ;;
+            3:true)
+                __POSH_STATE_INSIDE_WORK_TREE=true
+                ;;
+        esac
+    done <<< "$repo_state_output"
+}
+
+__posh_git_load_stash_state () {
+    local stash_info=
+
+    if ! $__POSH_CFG_ENABLE_STASH_STATUS; then
         return
     fi
 
+    stash_info=$(__posh_git_stash_info)
+    __POSH_STATE_HAS_STASH=${stash_info%%:*}
+    __POSH_STATE_STASH_COUNT=${stash_info#*:}
+}
+
+__posh_git_update_divergence_state () {
+    __posh_git_ps1_upstream_divergence
+    __POSH_STATE_DIVERGENCE_RETURN_CODE=$?
+}
+
+__posh_git_collect_status_v2 () {
+    local g=$1
+    local status_cmd=(status --porcelain=v2 --branch -z)
+    local status_record=
+    local branch_head=
+    local has_upstream=false
+
+    if $__POSH_CFG_ENABLE_STASH_STATUS && __posh_git_supports_show_stash; then
+        status_cmd+=(--show-stash)
+    fi
+
+    while IFS= read -r -d '' status_record; do
+        case "$status_record" in
+            '# branch.head '*)
+                branch_head=${status_record#'# branch.head '}
+                ;;
+            '# branch.oid '*)
+                __POSH_STATE_BRANCH_OID=${status_record#'# branch.oid '}
+                [ "$__POSH_STATE_BRANCH_OID" = '(initial)' ] && __POSH_STATE_BRANCH_OID=
+                ;;
+            '# branch.upstream '*)
+                has_upstream=true
+                ;;
+            '# branch.ab '*)
+                __POSH_BRANCH_AHEAD_BY=${${status_record#'# branch.ab +'}%% -*}
+                __POSH_BRANCH_BEHIND_BY=${status_record##* -}
+                __POSH_STATE_DIVERGENCE_RETURN_CODE=0
+                has_upstream=true
+                ;;
+            '# stash '*)
+                __POSH_STATE_STASH_COUNT=${status_record#'# stash '}
+                __POSH_STATE_HAS_STASH=true
+                ;;
+            '1 '* | 'u '*)
+                __posh_git_tally_xy "${status_record[3,4]}"
+                ;;
+            '2 '*)
+                __posh_git_tally_xy "${status_record[3,4]}"
+                IFS= read -r -d '' -u 0 _posh_git_orig_path_unused
+                ;;
+            \?\ *)
+                (( __POSH_FILES_ADDED++ ))
+                ;;
+        esac
+    done < <(__posh_git "${status_cmd[@]}" 2>/dev/null)
+
+    if [ -n "$branch_head" ]; then
+        if [ "$branch_head" = '(detached)' ]; then
+            __POSH_STATE_BRANCH=$(__posh_git_describe_detached "$g" "$__POSH_STATE_BRANCH_OID")
+        else
+            __POSH_STATE_BRANCH="refs/heads/$branch_head"
+        fi
+    fi
+
+    if ! $has_upstream; then
+        __POSH_STATE_DIVERGENCE_RETURN_CODE=1
+    fi
+
+    if $__POSH_CFG_ENABLE_STASH_STATUS && ! $__POSH_STATE_HAS_STASH && ! __posh_git_supports_show_stash; then
+        __posh_git_load_stash_state
+    fi
+}
+
+__posh_git_collect_status_v1 () {
+    local status_record=
+
+    if $__POSH_STATE_INSIDE_WORK_TREE; then
+        __posh_git_load_stash_state
+        __posh_git_update_divergence_state
+    fi
+
+    if ! $__POSH_CFG_ENABLE_FILE_STATUS; then
+        return
+    fi
+
+    while IFS= read -r -d '' status_record; do
+        case "${status_record:0:2}" in
+            '??')
+                (( __POSH_FILES_ADDED++ ))
+                ;;
+            *)
+                __posh_git_tally_xy "${status_record:0:2}"
+                case "${status_record:0:1}" in
+                    R | C)
+                        IFS= read -r -d '' -u 0 _posh_git_orig_path_unused
+                        ;;
+                esac
+                ;;
+        esac
+    done < <(__posh_git status --porcelain=v1 -z 2>/dev/null)
+}
+
+__posh_git_collect_prompt_state () {
+    local g=$1
+
+    __POSH_STATE_HAS_STASH=false
+    __POSH_STATE_STASH_COUNT=0
+    __POSH_STATE_IS_BARE=''
+    __POSH_STATE_DIVERGENCE_RETURN_CODE=1
+
+    __POSH_BRANCH_AHEAD_BY=0
+    __POSH_BRANCH_BEHIND_BY=0
+    __posh_git_reset_counters
+
+    __posh_git_detect_rebase_state "$g"
+    __posh_git_detect_repo_context
+
+    if ! $__POSH_CFG_ENABLE_FILE_STATUS; then
+        if $__POSH_STATE_INSIDE_WORK_TREE; then
+            __posh_git_load_stash_state
+            __posh_git_update_divergence_state
+        fi
+    elif $__POSH_STATE_INSIDE_WORK_TREE && __posh_git_supports_status_v2; then
+        __posh_git_collect_status_v2 "$g"
+    else
+        __posh_git_collect_status_v1
+    fi
+
+    if [ -z "$__POSH_STATE_BRANCH" ]; then
+        __POSH_STATE_BRANCH=$(__posh_git_resolve_ref "$g")
+    fi
+
+    if $__POSH_STATE_INSIDE_GIT_DIR; then
+        if $__POSH_STATE_IS_BARE_REPO; then
+            __POSH_STATE_IS_BARE='BARE:'
+        else
+            __POSH_STATE_BRANCH='GIT_DIR!'
+        fi
+    fi
+}
+
+__posh_git_render_prompt () {
     local Red='\033[0;31m'
     local Green='\033[0;32m'
     local BrightRed='\033[0;91m'
@@ -330,10 +545,6 @@ __posh_git_echo_sync () {
     local BranchBehindAndAheadForegroundColor=$(__posh_color $BrightYellow) # Yellow
     local BranchBehindAndAheadBackgroundColor=
 
-    local BeforeIndexText=''
-    local BeforeIndexForegroundColor=$(__posh_color $Green) # Dark green
-    local BeforeIndexBackgroundColor=
-
     local IndexForegroundColor=$(__posh_color $Green) # Dark green
     local IndexBackgroundColor=
 
@@ -359,271 +570,72 @@ __posh_git_echo_sync () {
     local BranchBehindStatusSymbol=''
     local BranchBehindAndAheadStatusSymbol=''
     local BranchWarningStatusSymbol=''
-    if $EnableStatusSymbol; then
-      BranchIdenticalStatusSymbol=$' \xE2\x89\xA1' # Three horizontal lines
-      BranchAheadStatusSymbol=$' \xE2\x86\x91' # Up Arrow
-      BranchBehindStatusSymbol=$' \xE2\x86\x93' # Down Arrow
-      BranchBehindAndAheadStatusSymbol=$'\xE2\x86\x95' # Up and Down Arrow
-      BranchWarningStatusSymbol=' ?'
-    fi
 
-    # these globals are updated by __posh_git_ps1_upstream_divergence
-    __POSH_BRANCH_AHEAD_BY=0
-    __POSH_BRANCH_BEHIND_BY=0
-
-    local g=$(__posh_gitdir)
-    if [ -z "$g" ]; then
-        return # not a git directory
-    fi
-    local rebase=''
-    local b=''
-    local branch_oid=''
-    local step=''
-    local total=''
-    if [ -d "$g/rebase-merge" ]; then
-        b=$(<"$g/rebase-merge/head-name" 2>/dev/null)
-        step=$(<"$g/rebase-merge/msgnum" 2>/dev/null)
-        total=$(<"$g/rebase-merge/end" 2>/dev/null)
-        if [ -f "$g/rebase-merge/interactive" ]; then
-            rebase='|REBASE-i'
-        else
-            rebase='|REBASE-m'
-        fi
-    else
-        if [ -d "$g/rebase-apply" ]; then
-            step=$(<"$g/rebase-apply/next" 2>/dev/null)
-            total=$(<"$g/rebase-apply/last" 2>/dev/null)
-            if [ -f "$g/rebase-apply/rebasing" ]; then
-                rebase='|REBASE'
-            elif [ -f "$g/rebase-apply/applying" ]; then
-                rebase='|AM'
-            else
-                rebase='|AM/REBASE'
-            fi
-        elif [ -f "$g/MERGE_HEAD" ]; then
-            rebase='|MERGING'
-        elif [ -f "$g/CHERRY_PICK_HEAD" ]; then
-            rebase='|CHERRY-PICKING'
-        elif [ -f "$g/REVERT_HEAD" ]; then
-            rebase='|REVERTING'
-        elif [ -f "$g/BISECT_LOG" ]; then
-            rebase='|BISECTING'
-        fi
-    fi
-
-    if [ -n "$step" ] && [ -n "$total" ]; then
-        rebase="$rebase $step/$total"
-    fi
-
-    local hasStash=false
-    local stashCount=0
-    local isBare=''
-    local divergence_return_code=1
-    local inside_git_dir=false
-    local inside_work_tree=false
-    local is_bare_repo=false
-    local repo_state_output=
-    local repo_state_value=
-    local repo_state_index=0
-    local stash_info=
-
-    __posh_git_reset_counters
-
-    repo_state_output=$(__posh_git rev-parse --is-inside-git-dir --is-bare-repository --is-inside-work-tree 2>/dev/null)
-    while IFS= read -r repo_state_value; do
-        (( repo_state_index++ ))
-        case "$repo_state_index:$repo_state_value" in
-            1:true)
-                inside_git_dir=true
-                ;;
-            2:true)
-                is_bare_repo=true
-                ;;
-            3:true)
-                inside_work_tree=true
-                ;;
-        esac
-    done <<< "$repo_state_output"
-
-    if ! $EnableFileStatus; then
-        if $inside_work_tree; then
-            if $EnableStashStatus; then
-                stash_info=$(__posh_git_stash_info)
-                hasStash=${stash_info%%:*}
-                stashCount=${stash_info#*:}
-            fi
-            __posh_git_ps1_upstream_divergence
-            divergence_return_code=$?
-        fi
-    elif $inside_work_tree && __posh_git_supports_status_v2; then
-        local status_cmd=(status --porcelain=v2 --branch -z)
-        local status_record=
-        local branch_head=
-        local has_upstream=false
-
-        if $EnableStashStatus && __posh_git_supports_show_stash; then
-            status_cmd+=(--show-stash)
-        fi
-
-        while IFS= read -r -d '' status_record; do
-            case "$status_record" in
-                '# branch.head '*)
-                    branch_head=${status_record#'# branch.head '}
-                    ;;
-                '# branch.oid '*)
-                    branch_oid=${status_record#'# branch.oid '}
-                    [ "$branch_oid" = '(initial)' ] && branch_oid=
-                    ;;
-                '# branch.upstream '*)
-                    has_upstream=true
-                    ;;
-                '# branch.ab '*)
-                    __POSH_BRANCH_AHEAD_BY=${${status_record#'# branch.ab +'}%% -*}
-                    __POSH_BRANCH_BEHIND_BY=${status_record##* -}
-                    divergence_return_code=0
-                    has_upstream=true
-                    ;;
-                '# stash '*)
-                    stashCount=${status_record#'# stash '}
-                    hasStash=true
-                    ;;
-                '1 '* | 'u '*)
-                    __posh_git_tally_xy "${status_record[3,4]}"
-                    ;;
-                '2 '*)
-                    __posh_git_tally_xy "${status_record[3,4]}"
-                    IFS= read -r -d '' -u 0 _posh_git_orig_path_unused
-                    ;;
-                \?\ *)
-                    (( __POSH_FILES_ADDED++ ))
-                    ;;
-            esac
-        done < <(__posh_git "${status_cmd[@]}" 2>/dev/null)
-
-        if [ -n "$branch_head" ]; then
-            if [ "$branch_head" = '(detached)' ]; then
-                b=$(__posh_git_describe_detached "$g" "$branch_oid")
-            else
-                b="refs/heads/$branch_head"
-            fi
-        fi
-
-        if ! $has_upstream; then
-            divergence_return_code=1
-        fi
-
-        if $EnableStashStatus && ! $hasStash && ! __posh_git_supports_show_stash; then
-            stash_info=$(__posh_git_stash_info)
-            hasStash=${stash_info%%:*}
-            stashCount=${stash_info#*:}
-        fi
-    else
-        if $inside_work_tree; then
-            if $EnableStashStatus; then
-                stash_info=$(__posh_git_stash_info)
-                hasStash=${stash_info%%:*}
-                stashCount=${stash_info#*:}
-            fi
-            __posh_git_ps1_upstream_divergence
-            divergence_return_code=$?
-        fi
-
-        # show index status and working directory status
-        if $EnableFileStatus; then
-            local status_record=
-            while IFS= read -r -d '' status_record; do
-                case "${status_record:0:2}" in
-                    '??')
-                        (( __POSH_FILES_ADDED++ ))
-                        ;;
-                    *)
-                        __posh_git_tally_xy "${status_record:0:2}"
-                        case "${status_record:0:1}" in
-                            R | C)
-                                IFS= read -r -d '' -u 0 _posh_git_orig_path_unused
-                                ;;
-                        esac
-                        ;;
-                esac
-            done < <(__posh_git status --porcelain=v1 -z 2>/dev/null)
-        fi
-    fi
-
-    if [ -z "$b" ]; then
-        b=$(__posh_git_resolve_ref "$g")
-    fi
-
-    if $inside_git_dir; then
-        if $is_bare_repo; then
-            isBare='BARE:'
-        else
-            b='GIT_DIR!'
-        fi
+    if $__POSH_CFG_ENABLE_STATUS_SYMBOL; then
+        BranchIdenticalStatusSymbol=$' \xE2\x89\xA1' # Three horizontal lines
+        BranchAheadStatusSymbol=$' \xE2\x86\x91' # Up Arrow
+        BranchBehindStatusSymbol=$' \xE2\x86\x93' # Down Arrow
+        BranchBehindAndAheadStatusSymbol=$'\xE2\x86\x95' # Up and Down Arrow
+        BranchWarningStatusSymbol=' ?'
     fi
 
     local gitstring=
-    local branchstring="$isBare${b##refs/heads/}"
+    local branchstring="$__POSH_STATE_IS_BARE${__POSH_STATE_BRANCH##refs/heads/}"
 
-    # before-branch text
     gitstring="$BeforeBackgroundColor$BeforeForegroundColor$BeforeText"
 
-    # branch
     if (( $__POSH_BRANCH_BEHIND_BY > 0 && $__POSH_BRANCH_AHEAD_BY > 0 )); then
         gitstring+="$BranchBehindAndAheadBackgroundColor$BranchBehindAndAheadForegroundColor$branchstring"
-        if [ "$BranchBehindAndAheadDisplay" = "full" ]; then
+        if [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "full" ]; then
             gitstring+="$BranchBehindStatusSymbol$__POSH_BRANCH_BEHIND_BY$BranchAheadStatusSymbol$__POSH_BRANCH_AHEAD_BY"
-        elif [ "$BranchBehindAndAheadDisplay" = "compact" ]; then
+        elif [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "compact" ]; then
             gitstring+=" $__POSH_BRANCH_BEHIND_BY$BranchBehindAndAheadStatusSymbol$__POSH_BRANCH_AHEAD_BY"
         else
             gitstring+=" $BranchBehindAndAheadStatusSymbol"
         fi
     elif (( $__POSH_BRANCH_BEHIND_BY > 0 )); then
         gitstring+="$BranchBehindBackgroundColor$BranchBehindForegroundColor$branchstring"
-        if [ "$BranchBehindAndAheadDisplay" = "full" -o "$BranchBehindAndAheadDisplay" = "compact" ]; then
+        if [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "full" -o "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "compact" ]; then
             gitstring+="$BranchBehindStatusSymbol$__POSH_BRANCH_BEHIND_BY"
         else
             gitstring+="$BranchBehindStatusSymbol"
         fi
     elif (( $__POSH_BRANCH_AHEAD_BY > 0 )); then
         gitstring+="$BranchAheadBackgroundColor$BranchAheadForegroundColor$branchstring"
-        if [ "$BranchBehindAndAheadDisplay" = "full" -o "$BranchBehindAndAheadDisplay" = "compact" ]; then
+        if [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "full" -o "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "compact" ]; then
             gitstring+="$BranchAheadStatusSymbol$__POSH_BRANCH_AHEAD_BY"
         else
             gitstring+="$BranchAheadStatusSymbol"
         fi
-    elif (( $divergence_return_code )); then
-        # ahead and behind are both 0, but there was some problem while executing the command.
+    elif (( $__POSH_STATE_DIVERGENCE_RETURN_CODE )); then
         gitstring+="$BranchBackgroundColor$BranchForegroundColor$branchstring$BranchWarningStatusSymbol"
     else
-        # ahead and behind are both 0, and the divergence was determined successfully
         gitstring+="$BranchBackgroundColor$BranchForegroundColor$branchstring$BranchIdenticalStatusSymbol"
     fi
 
-    gitstring+="${rebase:+$RebaseForegroundColor$RebaseBackgroundColor$rebase}"
+    gitstring+="${__POSH_STATE_REBASE:+$RebaseForegroundColor$RebaseBackgroundColor$__POSH_STATE_REBASE}"
 
-    # index status
-    if $EnableFileStatus; then
+    if $__POSH_CFG_ENABLE_FILE_STATUS; then
         local indexCount="$(( __POSH_INDEX_ADDED + __POSH_INDEX_MODIFIED + __POSH_INDEX_DELETED + __POSH_INDEX_UNMERGED ))"
         local workingCount="$(( __POSH_FILES_ADDED + __POSH_FILES_MODIFIED + __POSH_FILES_DELETED + __POSH_FILES_UNMERGED ))"
+        local localStatusSymbol=$LocalDefaultStatusSymbol
+        local localStatusColor=$DefaultForegroundColor
 
-        if (( $indexCount != 0 )) || $ShowStatusWhenZero; then
+        if (( indexCount != 0 )) || $__POSH_CFG_SHOW_STATUS_WHEN_ZERO; then
             gitstring+="$IndexBackgroundColor$IndexForegroundColor +$__POSH_INDEX_ADDED ~$__POSH_INDEX_MODIFIED -$__POSH_INDEX_DELETED"
         fi
         if (( $__POSH_INDEX_UNMERGED != 0 )); then
             gitstring+=" $IndexBackgroundColor$IndexForegroundColor!$__POSH_INDEX_UNMERGED"
         fi
-        if (( $indexCount != 0 && ($workingCount != 0 || $ShowStatusWhenZero) )); then
+        if (( indexCount != 0 && (workingCount != 0 || $__POSH_CFG_SHOW_STATUS_WHEN_ZERO) )); then
             gitstring+="$DelimBackgroundColor$DelimForegroundColor$DelimText"
         fi
-        if (( $workingCount != 0 )) || $ShowStatusWhenZero; then
+        if (( workingCount != 0 )) || $__POSH_CFG_SHOW_STATUS_WHEN_ZERO; then
             gitstring+="$WorkingBackgroundColor$WorkingForegroundColor +$__POSH_FILES_ADDED ~$__POSH_FILES_MODIFIED -$__POSH_FILES_DELETED"
         fi
         if (( $__POSH_FILES_UNMERGED != 0 )); then
             gitstring+=" $WorkingBackgroundColor$WorkingForegroundColor!$__POSH_FILES_UNMERGED"
         fi
-
-        local localStatusSymbol=$LocalDefaultStatusSymbol
-        local localStatusColor=$DefaultForegroundColor
 
         if (( workingCount != 0 )); then
             localStatusSymbol=$LocalWorkingStatusSymbol
@@ -635,14 +647,31 @@ __posh_git_echo_sync () {
 
         gitstring+="$DefaultBackgroundColor$localStatusColor$localStatusSymbol$DefaultForegroundColor"
 
-        if $EnableStashStatus && $hasStash; then
-            gitstring+="$DefaultBackgroundColor$DefaultForegroundColor $StashBackgroundColor$StashForegroundColor$BeforeStash$stashCount$AfterStash"
+        if $__POSH_CFG_ENABLE_STASH_STATUS && $__POSH_STATE_HAS_STASH; then
+            gitstring+="$DefaultBackgroundColor$DefaultForegroundColor $StashBackgroundColor$StashForegroundColor$BeforeStash$__POSH_STATE_STASH_COUNT$AfterStash"
         fi
     fi
 
-    # after-branch text
     gitstring+="$AfterBackgroundColor$AfterForegroundColor$AfterText$DefaultBackgroundColor$DefaultForegroundColor"
     echo "$gitstring"
+}
+
+# Echoes the git status string.
+__posh_git_echo_sync () {
+    local g
+
+    __posh_git_load_config
+    if ! $__POSH_CFG_ENABLE_GIT_STATUS; then
+        return
+    fi
+
+    g=$(__posh_gitdir)
+    if [ -z "$g" ]; then
+        return
+    fi
+
+    __posh_git_collect_prompt_state "$g"
+    __posh_git_render_prompt
 }
 
 # Returns the location of the .git/ directory.

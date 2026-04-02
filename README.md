@@ -15,6 +15,8 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 - 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
 - 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
 - 当前 shell 内会复用同一仓库的 in-flight 异步任务，避免连续回车时重复重启后台查询
+- 同一仓库的连续刷新会做短暂 debounce，并在需要时只补一次后台刷新
+- 后台任务超时后会在下一次刷新时自动回收并重启，避免单个卡住的 worker 长时间占位
 - 常规仓库路径会尽量避免重复的 `symbolic-ref` / `rev-parse` / `config` 调用
 
 ## 原理
@@ -27,6 +29,9 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 2. 同一仓库有未完成的后台查询时，后续 `precmd` 会直接复用，不重复启动
 3. 切换到其他仓库时，旧仓库的后台查询会被取消
 4. 查询完成后只在结果真的变化时刷新 prompt
+5. 同一仓库短时间内的连续刷新会被 debounce，避免频繁重复启动 worker
+6. 如果 worker 执行期间又收到了同仓库刷新请求，只会补跑一次，不会反复 kill/restart
+7. 如果某个 worker 长时间卡住，下次刷新会按超时策略回收并重启
 
 为了降低热路径开销，当前实现会：
 
@@ -35,6 +40,16 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 - stash 状态会优先走一次更快的计数路径，失败时再自动回退到兼容逻辑
 - 在旧版 Git 上自动回退到兼容路径
 - 离开 Git 仓库时清空显示，避免残留上一个仓库的状态
+
+### 代码结构
+
+当前同步主路径已经按职责拆成 3 层：
+
+- 配置加载：读取 `bash.*` 配置项并归一化默认值
+- 状态采集：判断仓库上下文、采集 branch / ahead-behind / stash / 文件状态
+- prompt 渲染：只负责把采集结果拼成最终的颜色字符串
+
+这样做的目标是让后续维护更安全：改采集逻辑时，不需要同时碰渲染细节；改显示格式时，也不容易误伤 Git 查询路径。
 
 ## 安装
 
@@ -98,6 +113,26 @@ POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 ```zsh
 DISABLE_UNTRACKED_FILES_DIRTY="true"
 ```
+
+## 可选环境变量
+
+下面这些变量都建议在 `source $ZSH/oh-my-zsh.sh` 之前设置：
+
+```zsh
+# 保留 oh-my-zsh 原生 git prompt，不让插件默认禁用它
+POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
+
+# 同一仓库连续刷新时的 debounce 窗口，默认 0.25 秒
+POSH_GIT_ASYNC_DEBOUNCE_SECONDS=0.25
+
+# 后台 worker 的超时秒数，默认 5 秒
+POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
+```
+
+说明：
+
+- `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` 越大，连续快速回车时越省后台 Git 查询，但状态更新可能会略晚一点
+- `POSH_GIT_ASYNC_TIMEOUT_SECONDS` 主要是稳定性保护，正常情况下不需要改
 
 **5. 重载配置**
 
