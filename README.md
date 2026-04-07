@@ -81,6 +81,26 @@ plugins=(
 )
 ```
 
+如果你还在 `~/.zshrc` 里为 VS Code 终端手动启用了 shell integration，并且写的是下面这种形式：
+
+```zsh
+[[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
+```
+
+它会在每次启动 VS Code 终端时额外启动一次 `code` 命令，带来可见的 shell startup 开销。更轻的写法是先运行一次：
+
+```bash
+code --locate-shell-integration-path zsh
+```
+
+拿到固定脚本路径后，直接在 `~/.zshrc` 中 `source` 这个路径，例如：
+
+```zsh
+[[ "$TERM_PROGRAM" == "vscode" ]] && . "/Applications/Visual Studio Code.app/Contents/Resources/app/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-rc.zsh"
+```
+
+这条提示和本插件本身无强依赖，但如果你在 VS Code 里排查 zsh 启动慢，值得先处理掉这类额外开销，再评估 prompt/Git 查询的真实成本。
+
 **3. 修改主题中的 git prompt 占位符**
 
 找到你的主题文件（通常在 `~/.oh-my-zsh/themes/` 或 `~/.oh-my-zsh/custom/themes/` 目录下），将 git_info 的赋值改为调用本插件：
