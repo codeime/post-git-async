@@ -1,77 +1,79 @@
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 # posh-git-async
 
-## 项目简介
+## Overview
 
-posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 zsh 的开发者设计。
+posh-git-async is an oh-my-zsh plugin for developers who use zsh in large Git repositories.
 
-它将 [posh-git-sh](https://github.com/lyze/posh-git-sh) 提供的 Git 状态 prompt（分支名、文件变更数、ahead/behind 等信息）改造为**异步非阻塞**模式：每次按下回车后，终端 prompt 立即响应，Git 状态信息在后台静默更新，彻底消除大型仓库中因 `git status` 耗时导致的 prompt 卡顿感。
+It turns the Git status prompt from [posh-git-sh](https://github.com/lyze/posh-git-sh) into an **asynchronous, non-blocking** workflow: every time you press Enter, the prompt returns immediately, while Git status information is refreshed quietly in the background. This eliminates the prompt lag caused by slow `git status` calls in large repositories.
 
-如果你曾在大型 monorepo 或历史悠久的项目中遇到"按回车后终端卡住 1~3 秒才出现新 prompt"的问题，这个插件就是为此而生的。
+If you have ever worked in a large monorepo or a long-lived project where pressing Enter freezes the terminal for 1 to 3 seconds before the next prompt appears, this plugin is built for that case.
 
-将 [posh-git-sh](https://github.com/lyze/posh-git-sh) 的 git prompt 改造为异步非阻塞版本，解决在大型仓库中按回车后 prompt 卡顿的问题。
+In short, it converts the git prompt logic from [posh-git-sh](https://github.com/lyze/posh-git-sh) into an asynchronous version to solve prompt lag in large repositories.
 
-当前版本还额外做了几项热路径优化：
+The current version also includes several hot-path optimizations:
 
-- 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
-- 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
-- 当前 shell 内会复用同一仓库的 in-flight 异步任务，避免连续回车时重复重启后台查询
-- 同一仓库的连续刷新会做短暂 debounce，并在需要时只补一次后台刷新
-- 后台任务超时后会在下一次刷新时自动回收并重启，避免单个卡住的 worker 长时间占位
-- 常规仓库路径会尽量避免重复的 `symbolic-ref` / `rev-parse` / `config` 调用
+- Prefer a single `git status --porcelain=v2 --branch -z` call to collect branch, ahead/behind, stash, and file status
+- Use `GIT_OPTIONAL_LOCKS=0` for all prompt-related Git calls
+- Reuse the in-flight async task for the same repository inside the current shell instead of restarting background work on rapid consecutive Enter presses
+- Apply a short debounce window to repeated refreshes in the same repository, and schedule at most one extra background refresh when needed
+- Clean up and restart a timed-out background worker on the next refresh so a stuck worker does not occupy the slot forever
+- Avoid redundant `symbolic-ref`, `rev-parse`, and `config` calls on common repository paths whenever possible
 
-## 原理
+## How It Works
 
-原版 `__posh_git_echo` 每次渲染 prompt 时同步执行多个 git 命令（`git status`、`git rev-list` 等），在大型仓库中耗时明显。
+The original `__posh_git_echo` renders the prompt by synchronously running multiple Git commands such as `git status` and `git rev-list`, which is noticeably expensive in large repositories.
 
-本插件将其改为：
+This plugin changes that behavior to:
 
-1. prompt 立即渲染，显示上一次缓存的 git 状态
-2. 同一仓库有未完成的后台查询时，后续 `precmd` 会直接复用，不重复启动
-3. 切换到其他仓库时，旧仓库的后台查询会被取消
-4. 查询完成后只在结果真的变化时刷新 prompt
-5. 同一仓库短时间内的连续刷新会被 debounce，避免频繁重复启动 worker
-6. 如果 worker 执行期间又收到了同仓库刷新请求，只会补跑一次，不会反复 kill/restart
-7. 如果某个 worker 长时间卡住，下次刷新会按超时策略回收并重启
+1. Render the prompt immediately and display the last cached Git state
+2. Reuse the same background query when the current repository already has an unfinished async task instead of starting another one
+3. Cancel the old background query when you switch to another repository
+4. Refresh the prompt only when the new result is actually different
+5. Debounce rapid consecutive refreshes in the same repository to avoid repeatedly starting workers
+6. If another refresh arrives while a worker is still running for the same repository, schedule at most one follow-up run instead of repeatedly killing and restarting
+7. Reap and restart a worker on the next refresh if it gets stuck for too long
 
-为了降低热路径开销，当前实现会：
+To reduce hot-path cost, the current implementation also:
 
-- 优先走 `git status --porcelain=v2 --branch -z`
-- 当 `bash.enableFileStatus=false` 时，跳过 `git status` 文件扫描，改走更轻的分支状态路径
-- stash 状态会优先走一次更快的计数路径，失败时再自动回退到兼容逻辑
-- 在旧版 Git 上自动回退到兼容路径
-- 离开 Git 仓库时清空显示，避免残留上一个仓库的状态
+- Prefers `git status --porcelain=v2 --branch -z`
+- Skips file scanning and uses a lighter branch-status path when `bash.enableFileStatus=false`
+- Uses a faster stash-count path first and falls back to a compatibility path only if needed
+- Automatically falls back to a compatibility path on older Git versions
+- Clears the display when you leave a Git repository so status from the previous repository does not linger
 
-### 代码结构
+### Code Structure
 
-当前同步主路径已经按职责拆成 3 层：
+The synchronous main path is currently split into three layers:
 
-- 配置加载：读取 `bash.*` 配置项并归一化默认值
-- 状态采集：判断仓库上下文、采集 branch / ahead-behind / stash / 文件状态
-- prompt 渲染：只负责把采集结果拼成最终的颜色字符串
+- Config loading: reads `bash.*` configuration values and normalizes defaults
+- State collection: detects repository context and gathers branch / ahead-behind / stash / file status
+- Prompt rendering: only assembles the collected state into the final colored string
 
-这样做的目标是让后续维护更安全：改采集逻辑时，不需要同时碰渲染细节；改显示格式时，也不容易误伤 Git 查询路径。
+The goal is to make future maintenance safer: changes to collection logic do not need to touch rendering details, and display changes are less likely to break the Git query path.
 
-## 安装
+## Installation
 
-**1. 下载插件到 oh-my-zsh 自定义插件目录**
+**1. Download the plugin into your oh-my-zsh custom plugin directory**
 
 ```bash
-# 方式一：如果项目已发布到 GitHub
+# Option 1: if the project is published on GitHub
 git clone thisRepoUrl ~/.oh-my-zsh/custom/plugins/posh-git-async
 
-# 方式二：本地安装（开发或测试）
+# Option 2: local install (development or testing)
 ln -s /path/to/posh-git-async ~/.oh-my-zsh/custom/plugins/posh-git-async
 
-# 方式三：直接复制文件（不使用软链）
+# Option 3: copy files directly (without a symlink)
 mkdir -p ~/.oh-my-zsh/custom/plugins/posh-git-async
 cp /path/to/posh-git-async/posh-git-async.plugin.zsh ~/.oh-my-zsh/custom/plugins/posh-git-async/
 cp /path/to/posh-git-async/README.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
 cp /path/to/posh-git-async/LICENSE ~/.oh-my-zsh/custom/plugins/posh-git-async/
 ```
 
-**2. 修改 `~/.zshrc`**
+**2. Update `~/.zshrc`**
 
-如果从 [posh-git-sh](https://github.com/lyze/posh-git-sh) 或你之前的本地同步脚本迁移，移除原有的 `source ~/git-prompt.sh`，在 plugins 列表中添加插件：
+If you are migrating from [posh-git-sh](https://github.com/lyze/posh-git-sh) or from a previous local synchronous script, remove the old `source ~/git-prompt.sh` and add the plugin to your plugins list:
 
 ```zsh
 plugins=(
@@ -81,180 +83,180 @@ plugins=(
 )
 ```
 
-如果你还在 `~/.zshrc` 里为 VS Code 终端手动启用了 shell integration，并且写的是下面这种形式：
+If you also manually enabled VS Code shell integration in `~/.zshrc` with a line like this:
 
 ```zsh
 [[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
 ```
 
-它会在每次启动 VS Code 终端时额外启动一次 `code` 命令，带来可见的 shell startup 开销。更轻的写法是先运行一次：
+that line starts the `code` command every time a VS Code terminal launches, which adds visible shell startup overhead. A lighter approach is to run this once:
 
 ```bash
 code --locate-shell-integration-path zsh
 ```
 
-拿到固定脚本路径后，直接在 `~/.zshrc` 中 `source` 这个路径，例如：
+Then copy the resolved script path and source it directly from `~/.zshrc`, for example:
 
 ```zsh
 [[ "$TERM_PROGRAM" == "vscode" ]] && . "/Applications/Visual Studio Code.app/Contents/Resources/app/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-rc.zsh"
 ```
 
-这条提示和本插件本身无强依赖，但如果你在 VS Code 里排查 zsh 启动慢，值得先处理掉这类额外开销，再评估 prompt/Git 查询的真实成本。
+This note is not a hard dependency of the plugin itself, but it is worth addressing first when you are diagnosing slow zsh startup inside VS Code so you can measure the real prompt and Git-query cost more accurately.
 
-**3. 修改主题中的 git prompt 占位符**
+**3. Update the git prompt placeholder in your theme**
 
-找到你的主题文件（通常在 `~/.oh-my-zsh/themes/` 或 `~/.oh-my-zsh/custom/themes/` 目录下），将 git_info 的赋值改为调用本插件：
+Find your theme file, usually under `~/.oh-my-zsh/themes/` or `~/.oh-my-zsh/custom/themes/`, and change the `git_info` assignment to call this plugin:
 
 ```zsh
-# 改前
+# Before
 local git_info='$(git_prompt_info)'
 
-# 改后
+# After
 local git_info='$(__posh_git_echo)'
 ```
 
-**4. oh-my-zsh 内置 git prompt 会默认被插件禁用**
+**4. oh-my-zsh's built-in git prompt is disabled by default**
 
-为了避免重复 Git 查询，插件加载后会默认把 `git_prompt_info`、`git_prompt_status` 和 `git_prompt_ahead` 覆盖为空实现。
+To avoid duplicate Git queries, the plugin overrides `git_prompt_info`, `git_prompt_status`, and `git_prompt_ahead` with empty implementations after loading.
 
-这意味着：
+That means:
 
-- 如果你的主题已经改成使用 `$(__posh_git_echo)`，就不需要再手动禁用 oh-my-zsh 内置 git prompt
-- 如果你的主题还在使用 `$(git_prompt_info)`，git 区域会变空，所以请先按上一步改主题
+- If your theme already uses `$(__posh_git_echo)`, you do not need to manually disable oh-my-zsh's built-in git prompt
+- If your theme still uses `$(git_prompt_info)`, the git section will become empty, so update the theme first as described above
 
-如果你确实想保留 oh-my-zsh 原生 git prompt，可以在 `source $ZSH/oh-my-zsh.sh` 之前设置：
+If you really want to keep oh-my-zsh's native git prompt, set this before `source $ZSH/oh-my-zsh.sh`:
 
 ```zsh
 POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 ```
 
-另外，你也可以继续在 `source $ZSH/oh-my-zsh.sh` 之前设置下面这个变量，减少 oh-my-zsh 原生 dirty 检查（注意：这不会完全禁用内置 git prompt）：
+You can also continue setting the following variable before `source $ZSH/oh-my-zsh.sh` to reduce oh-my-zsh's native dirty-check cost. Note that this does not fully disable the built-in git prompt:
 
 ```zsh
 DISABLE_UNTRACKED_FILES_DIRTY="true"
 ```
 
-## 可选环境变量
+## Optional Environment Variables
 
-下面这些变量都建议在 `source $ZSH/oh-my-zsh.sh` 之前设置：
+Set these variables before `source $ZSH/oh-my-zsh.sh`:
 
 ```zsh
-# 保留 oh-my-zsh 原生 git prompt，不让插件默认禁用它
+# Keep oh-my-zsh's native git prompt instead of letting the plugin disable it by default
 POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 
-# 同一仓库连续刷新时的 debounce 窗口，默认 0.25 秒
+# Debounce window for consecutive refreshes in the same repository, default: 0.25 seconds
 POSH_GIT_ASYNC_DEBOUNCE_SECONDS=0.25
 
-# 后台 worker 的超时秒数，默认 5 秒
+# Timeout for the background worker, default: 5 seconds
 POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
 ```
 
-说明：
+Notes:
 
-- `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` 越大，连续快速回车时越省后台 Git 查询，但状态更新可能会略晚一点
-- `POSH_GIT_ASYNC_TIMEOUT_SECONDS` 主要是稳定性保护，正常情况下不需要改
+- A larger `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` value reduces background Git queries during rapid Enter presses, but prompt status may update a little later
+- `POSH_GIT_ASYNC_TIMEOUT_SECONDS` is mainly a stability guard and usually does not need to be changed
 
-**5. 重载配置**
+**5. Reload your shell configuration**
 
 ```bash
 source ~/.zshrc
 ```
 
-## 系统要求
+## Requirements
 
-- zsh 4.3.11 或更高版本（需要 `zle -F` 支持）
+- zsh 4.3.11 or newer, with `zle -F` support
 - oh-my-zsh
 - git
 
-备注：
+Notes:
 
-- 较新的 Git 版本会优先使用 `porcelain v2` 路径，性能更好
-- 较旧的 Git 版本会自动回退到兼容逻辑，但状态采集可能稍重
+- Newer Git versions will prefer the porcelain v2 path and perform better
+- Older Git versions automatically fall back to a compatibility path, but state collection may be heavier
 
-## 卸载
+## Uninstall
 
-**1. 从 `~/.zshrc` 的 plugins 列表中移除 `posh-git-async`**
+**1. Remove `posh-git-async` from the plugins list in `~/.zshrc`**
 
 ```zsh
 plugins=(
-    # posh-git-async  # 注释或删除这行
+    # posh-git-async  # comment out or delete this line
     zsh-autosuggestions
     zsh-syntax-highlighting
 )
 ```
 
-**2. 恢复主题文件中的原始 git prompt**
+**2. Restore the original git prompt in your theme**
 
 ```zsh
-# 改回
+# Change it back
 local git_info='$(git_prompt_info)'
 ```
 
-**3. 重载配置**
+**3. Reload your shell configuration**
 
 ```bash
 source ~/.zshrc
 ```
 
-**4. （可选）删除插件文件**
+**4. Optional: delete the plugin files**
 
 ```bash
 rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 ```
 
-## 故障排查
+## Troubleshooting
 
-### git 信息一直不显示
+### Git information never appears
 
-**可能原因**：
+**Possible causes:**
 
-- 主题文件未正确修改为调用 `$(__posh_git_echo)`
-- 主题仍在使用 `$(git_prompt_info)`，而插件已经默认禁用了 oh-my-zsh 内置 git prompt
-- 不在 git 仓库目录中
+- Your theme file was not updated to call `$(__posh_git_echo)`
+- Your theme is still using `$(git_prompt_info)`, while the plugin already disabled oh-my-zsh's built-in git prompt by default
+- You are not inside a Git repository
 
-**解决方法**：
+**How to fix it:**
 
-1. 检查主题文件是否正确使用 `$(__posh_git_echo)`
-2. 如果你确实要保留 `$(git_prompt_info)`，请在 `source $ZSH/oh-my-zsh.sh` 之前设置 `POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false`
-3. 在 git 仓库目录中测试：`cd /path/to/git/repo`
-4. 手动测试：在终端执行 `__posh_git_echo_sync`，查看是否有输出
+1. Check that your theme correctly uses `$(__posh_git_echo)`
+2. If you really want to keep `$(git_prompt_info)`, set `POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false` before `source $ZSH/oh-my-zsh.sh`
+3. Test inside a Git repository: `cd /path/to/git/repo`
+4. Run a manual check in the terminal: `__posh_git_echo_sync`, and see whether it prints anything
 
-### prompt 显示错误信息或乱码
+### The prompt shows errors or garbled output
 
-**可能原因**：
+**Possible causes:**
 
-- git 命令执行失败
-- 终端不支持颜色代码
+- A Git command failed
+- Your terminal does not support the color sequences being used
 
-**解决方法**：
+**How to fix it:**
 
-1. 检查 git 是否正常工作：`git status`
-2. 临时禁用插件测试：从 plugins 列表中移除后 `source ~/.zshrc`
+1. Verify Git itself works: `git status`
+2. Temporarily disable the plugin by removing it from the plugins list, then run `source ~/.zshrc`
 
-### 关闭文件状态后为什么 prompt 会更快
+### Why is the prompt faster when file status is disabled
 
-**说明**：当你设置 `git config bash.enableFileStatus false` 时，插件当前会跳过 `git status` 文件扫描，不再统计 staged / unstaged 文件数量，只保留分支、ahead/behind、stash 等较轻的状态信息。
+**Explanation:** when you set `git config bash.enableFileStatus false`, the plugin skips `git status` file scanning. It no longer counts staged and unstaged file changes, and keeps only lighter status information such as branch, ahead/behind, and stash.
 
-### 切换目录后显示错误的 git 状态
+### Why does the prompt sometimes show the wrong Git status after changing directories
 
-**说明**：当前实现会避免把旧仓库的后台结果覆盖到新仓库 prompt 上。切换到另一个仓库后，如果 git 区域短暂为空，等异步查询完成后就会显示新仓库状态。
+**Explanation:** the current implementation prevents background results from an old repository from overwriting the prompt of a new one. After switching to another repository, the Git section may be empty briefly until the async refresh finishes.
 
-### 多个终端同时打开时为什么不会共享状态
+### Why don't multiple terminals share the same state
 
-**说明**：插件只在当前 shell 进程内维护当前 prompt 结果和 in-flight 异步任务，不会在多个终端之间共享状态。
+**Explanation:** the plugin stores prompt state and in-flight async tasks only inside the current shell process. It does not share state across multiple terminals.
 
-**影响**：
+**Impact:**
 
-- 优点：实现简单，不写临时文件，也不会引入跨终端缓存一致性问题
-- 限制：如果你同时打开很多终端并进入同一个大型仓库，每个终端仍会各自执行后台 Git 查询
+- Advantage: the design stays simple, avoids temp files, and does not introduce cross-terminal cache consistency issues
+- Limitation: if you open many terminals in the same large repository, each terminal still runs its own background Git queries
 
-## 注意
+## Notes
 
-- 首次打开终端时 git 信息为空，第一次异步完成后才显示
-- 切换到另一个仓库后，git 区域可能会短暂为空，异步刷新后更新
-- 当前 prompt 结果和异步任务只存在于当前 shell 内存中，不会跨终端共享
-- 如果你使用“复制文件”安装方式，仓库里的后续修改不会自动同步到 `~/.oh-my-zsh/custom/plugins/posh-git-async/`
+- Git information is empty when the terminal first opens, and appears after the first async refresh completes
+- After switching to another repository, the Git section may be empty briefly until the async refresh updates it
+- Prompt state and async tasks exist only in the current shell process and are not shared across terminals
+- If you install by copying files instead of using a symlink, later changes in this repository will not be synced automatically into `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
-## 许可证
+## License
 
-本项目基于 [posh-git-sh](https://github.com/lyze/posh-git-sh)（Copyright © 2022 David Xu）修改，依据 [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html) 发布。
+This project is based on [posh-git-sh](https://github.com/lyze/posh-git-sh) (Copyright © 2022 David Xu), with modifications released under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html).
