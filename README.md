@@ -117,18 +117,20 @@ local git_info='$(__posh_git_echo)'
 
 **4. oh-my-zsh's built-in git prompt is disabled by default**
 
-To avoid duplicate Git queries, the plugin overrides `git_prompt_info`, `git_prompt_status`, and `git_prompt_ahead` with empty implementations after loading.
+To avoid duplicate Git queries in the common oh-my-zsh setup, the plugin overrides `git_prompt_info`, `git_prompt_status`, and `git_prompt_ahead` with empty implementations if those functions already exist when the plugin loads.
 
 That means:
 
 - If your theme already uses `$(__posh_git_echo)`, you do not need to manually disable oh-my-zsh's built-in git prompt
 - If your theme still uses `$(git_prompt_info)`, the git section will become empty, so update the theme first as described above
 
-If you really want to keep oh-my-zsh's native git prompt, set this before `source $ZSH/oh-my-zsh.sh`:
+If you really want to keep oh-my-zsh's native `git_prompt_*` helpers, set this before `source $ZSH/oh-my-zsh.sh`:
 
 ```zsh
 POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 ```
+
+This only stops the plugin from overriding those oh-my-zsh helper functions. It does **not** disable the plugin's own async `precmd` refresh hook. If your theme still uses `$(git_prompt_info)` instead of `$(__posh_git_echo)`, oh-my-zsh's native prompt and this plugin's background refresh may both run.
 
 You can also continue setting the following variable before `source $ZSH/oh-my-zsh.sh` to reduce oh-my-zsh's native dirty-check cost. Note that this does not fully disable the built-in git prompt:
 
@@ -141,7 +143,7 @@ DISABLE_UNTRACKED_FILES_DIRTY="true"
 Set these variables before `source $ZSH/oh-my-zsh.sh`:
 
 ```zsh
-# Keep oh-my-zsh's native git prompt instead of letting the plugin disable it by default
+# Keep oh-my-zsh's native git_prompt_* helpers instead of letting the plugin override them by default
 POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 
 # Debounce window for consecutive refreshes in the same repository, default: 0.25 seconds
@@ -153,6 +155,7 @@ POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
 
 Notes:
 
+- `POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false` keeps oh-my-zsh's native `git_prompt_*` helpers, but does not disable this plugin's async refresh hook
 - A larger `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` value reduces background Git queries during rapid Enter presses, but prompt status may update a little later
 - `POSH_GIT_ASYNC_TIMEOUT_SECONDS` is mainly a stability guard and usually does not need to be changed
 
@@ -235,7 +238,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 ### Why is the prompt faster when file status is disabled
 
-**Explanation:** when you set `git config bash.enableFileStatus false`, the plugin skips `git status` file scanning. It no longer counts staged and unstaged file changes, and keeps only lighter status information such as branch, ahead/behind, and stash.
+**Explanation:** when you set `git config bash.enableFileStatus false`, the plugin skips `git status` file scanning. It no longer counts staged and unstaged file changes, and keeps lighter prompt information such as branch and ahead/behind. Stash state is still collected on this path, but it is not currently rendered in the prompt when file status is disabled.
 
 ### Why does the prompt sometimes show the wrong Git status after changing directories
 

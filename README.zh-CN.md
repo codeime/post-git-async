@@ -117,18 +117,20 @@ local git_info='$(__posh_git_echo)'
 
 **4. oh-my-zsh 内置 git prompt 会默认被插件禁用**
 
-为了避免重复 Git 查询，插件加载后会默认把 `git_prompt_info`、`git_prompt_status` 和 `git_prompt_ahead` 覆盖为空实现。
+为了在常见 oh-my-zsh 场景里避免重复 Git 查询，插件加载时如果发现 `git_prompt_info`、`git_prompt_status` 和 `git_prompt_ahead` 已经存在，就会默认把它们覆盖为空实现。
 
 这意味着：
 
 - 如果你的主题已经改成使用 `$(__posh_git_echo)`，就不需要再手动禁用 oh-my-zsh 内置 git prompt
 - 如果你的主题还在使用 `$(git_prompt_info)`，git 区域会变空，所以请先按上一步改主题
 
-如果你确实想保留 oh-my-zsh 原生 git prompt，可以在 `source $ZSH/oh-my-zsh.sh` 之前设置：
+如果你确实想保留 oh-my-zsh 原生的 `git_prompt_*` helper，可以在 `source $ZSH/oh-my-zsh.sh` 之前设置：
 
 ```zsh
 POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 ```
+
+这个开关只是不再覆盖上述 oh-my-zsh helper，并**不会**关闭插件自己的异步 `precmd` 刷新 hook。也就是说，如果你的主题仍然使用 `$(git_prompt_info)` 而不是 `$(__posh_git_echo)`，oh-my-zsh 原生 prompt 和本插件的后台刷新可能会同时运行。
 
 另外，你也可以继续在 `source $ZSH/oh-my-zsh.sh` 之前设置下面这个变量，减少 oh-my-zsh 原生 dirty 检查（注意：这不会完全禁用内置 git prompt）：
 
@@ -141,7 +143,7 @@ DISABLE_UNTRACKED_FILES_DIRTY="true"
 下面这些变量都建议在 `source $ZSH/oh-my-zsh.sh` 之前设置：
 
 ```zsh
-# 保留 oh-my-zsh 原生 git prompt，不让插件默认禁用它
+# 保留 oh-my-zsh 原生 `git_prompt_*` helper，不让插件默认覆盖它们
 POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false
 
 # 同一仓库连续刷新时的 debounce 窗口，默认 0.25 秒
@@ -153,6 +155,7 @@ POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
 
 说明：
 
+- `POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false` 会保留 oh-my-zsh 原生 `git_prompt_*` helper，但不会关闭本插件自己的异步刷新 hook
 - `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` 越大，连续快速回车时越省后台 Git 查询，但状态更新可能会略晚一点
 - `POSH_GIT_ASYNC_TIMEOUT_SECONDS` 主要是稳定性保护，正常情况下不需要改
 
@@ -235,7 +238,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 ### 关闭文件状态后为什么 prompt 会更快
 
-**说明**：当你设置 `git config bash.enableFileStatus false` 时，插件当前会跳过 `git status` 文件扫描，不再统计 staged / unstaged 文件数量，只保留分支、ahead/behind、stash 等较轻的状态信息。
+**说明**：当你设置 `git config bash.enableFileStatus false` 时，插件当前会跳过 `git status` 文件扫描，不再统计 staged / unstaged 文件数量，prompt 里只保留分支、ahead/behind 等较轻的状态信息。stash 状态在这条路径上仍会被采集，但当前不会渲染到 prompt 中。
 
 ### 切换目录后显示错误的 git 状态
 
