@@ -706,15 +706,14 @@ __posh_git_ps1_upstream_divergence ()
     local legacy=''
 
     svn_remote=()
+    local _show_upstream_configured=false
     # get some config options from git-config
     local output="$(__posh_git config -z --get-regexp '^(svn-remote\..*\.url|bash\.showUpstream)$' 2>/dev/null | tr '\0\n' '\n ')"
     while read -r key value; do
         case "$key" in
-        bash.showUpstream)
+        bash.showupstream)
             GIT_PS1_SHOWUPSTREAM="$value"
-            if [ -z "${GIT_PS1_SHOWUPSTREAM}" ]; then
-                return
-            fi
+            _show_upstream_configured=true
             ;;
         svn-remote.*.url)
             svn_remote[ $((${#svn_remote[@]} + 1)) ]="$value"
@@ -724,8 +723,12 @@ __posh_git_ps1_upstream_divergence ()
         esac
     done <<< "$output"
 
+    if $_show_upstream_configured && [ -z "${GIT_PS1_SHOWUPSTREAM}" ]; then
+        return
+    fi
+
     # parse configuration values
-    for option in ${GIT_PS1_SHOWUPSTREAM}; do
+    for option in ${=GIT_PS1_SHOWUPSTREAM}; do
         case "$option" in
         git|svn) upstream="$option" ;;
         legacy)  legacy=1  ;;
@@ -767,24 +770,24 @@ __posh_git_ps1_upstream_divergence ()
     # Find how many commits we are ahead/behind our upstream
     if [ -z "$legacy" ]; then
         local output=
-        output=$(__posh_git rev-list --count --left-right $upstream...HEAD 2>/dev/null)
+        output=$(__posh_git rev-list --count --left-right "${upstream}...HEAD" 2>/dev/null)
         return_code=$?
-        IFS=$' \t\n' read -r __POSH_BRANCH_BEHIND_BY __POSH_BRANCH_AHEAD_BY <<< $output
+        IFS=$' \t\n' read -r __POSH_BRANCH_BEHIND_BY __POSH_BRANCH_AHEAD_BY <<< "$output"
     else
         local output
-        output=$(__posh_git rev-list --left-right $upstream...HEAD 2>/dev/null)
+        output=$(__posh_git rev-list --left-right "${upstream}...HEAD" 2>/dev/null)
         return_code=$?
         # produce equivalent output to --count for older versions of git
         while IFS=$' \t\n' read -r commit; do
             case "$commit" in
-            "<*") (( __POSH_BRANCH_BEHIND_BY++ )) ;;
-            ">*") (( __POSH_BRANCH_AHEAD_BY++ ))  ;;
+            "<"*) (( __POSH_BRANCH_BEHIND_BY++ )) ;;
+            ">"*) (( __POSH_BRANCH_AHEAD_BY++ ))  ;;
             esac
-        done <<< $output
+        done <<< "$output"
     fi
     : ${__POSH_BRANCH_AHEAD_BY:=0}
     : ${__POSH_BRANCH_BEHIND_BY:=0}
-    return $return_code
+    return "$return_code"
 }
 
 # =============================================================================
