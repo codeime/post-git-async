@@ -115,6 +115,21 @@ local git_info='$(git_prompt_info)'
 local git_info='$(__posh_git_echo)'
 ```
 
+如果你本来就在用 `ys-my`，也可以直接使用这个仓库里自带的主题变体，跳过手改系统主题文件：
+
+```bash
+ln -s /path/to/posh-git-async/themes/ys-new.zsh-theme \
+  ~/.oh-my-zsh/custom/themes/ys-new.zsh-theme
+```
+
+然后在 `~/.zshrc` 里改成：
+
+```zsh
+ZSH_THEME="ys-new"
+```
+
+这个内置主题会保留原始 `ys-my` 的布局，git 状态直接走 `$(__posh_git_echo)`，并且自带一套更适合深色终端主题（例如 cmux 的 `Dark Modern`）的柔和灰色时间显示。
+
 **4. oh-my-zsh 内置 git prompt 会默认被插件禁用**
 
 为了在常见 oh-my-zsh 场景里避免重复 Git 查询，插件加载时如果发现 `git_prompt_info`、`git_prompt_status` 和 `git_prompt_ahead` 已经存在，就会默认把它们覆盖为空实现。

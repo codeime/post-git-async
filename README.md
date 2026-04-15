@@ -115,6 +115,21 @@ local git_info='$(git_prompt_info)'
 local git_info='$(__posh_git_echo)'
 ```
 
+If you already use `ys-my`, you can skip the manual edit and use the bundled theme variant from this repo instead:
+
+```bash
+ln -s /path/to/posh-git-async/themes/ys-new.zsh-theme \
+  ~/.oh-my-zsh/custom/themes/ys-new.zsh-theme
+```
+
+Then set this in `~/.zshrc` before reloading your shell:
+
+```zsh
+ZSH_THEME="ys-new"
+```
+
+This bundled theme keeps the original `ys-my` layout, uses `$(__posh_git_echo)` for async Git state, and ships with a softer gray timestamp that stays readable on dark terminal themes such as cmux's `Dark Modern`.
+
 **4. oh-my-zsh's built-in git prompt is disabled by default**
 
 To avoid duplicate Git queries in the common oh-my-zsh setup, the plugin overrides `git_prompt_info`, `git_prompt_status`, and `git_prompt_ahead` with empty implementations if those functions already exist when the plugin loads.
