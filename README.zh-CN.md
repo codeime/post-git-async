@@ -68,6 +68,7 @@ ln -s /path/to/posh-git-async ~/.oh-my-zsh/custom/plugins/posh-git-async
 mkdir -p ~/.oh-my-zsh/custom/plugins/posh-git-async
 cp /path/to/posh-git-async/posh-git-async.plugin.zsh ~/.oh-my-zsh/custom/plugins/posh-git-async/
 cp /path/to/posh-git-async/README.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
+cp /path/to/posh-git-async/README.zh-CN.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
 cp /path/to/posh-git-async/LICENSE ~/.oh-my-zsh/custom/plugins/posh-git-async/
 ```
 
@@ -180,6 +181,16 @@ POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
 source ~/.zshrc
 ```
 
+**可选：编译插件以加快 shell 加载**
+
+如果你经常打开很多新终端，可以在本机对安装后的插件文件做 zsh 字节码编译：
+
+```bash
+zcompile ~/.oh-my-zsh/custom/plugins/posh-git-async/posh-git-async.plugin.zsh
+```
+
+这会在插件文件旁边生成 `posh-git-async.plugin.zsh.zwc`。它只优化 zsh 解析/加载时间；Git 状态采集仍取决于仓库大小和 Git 命令本身的耗时。每次更新插件文件后都需要重新运行 `zcompile`。不要把 `.zwc` 文件提交到这个仓库。
+
 ## 系统要求
 
 - zsh 4.3.11 或更高版本（需要 `zle -F` 支持）
@@ -265,7 +276,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 **影响**：
 
-- 优点：实现简单，不写临时文件，也不会引入跨终端缓存一致性问题
+- 优点：实现简单，缓存状态只保存在内存里，也不会引入跨终端缓存一致性问题
 - 限制：如果你同时打开很多终端并进入同一个大型仓库，每个终端仍会各自执行后台 Git 查询
 
 ## 注意
@@ -273,6 +284,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 - 首次打开终端时 git 信息为空，第一次异步完成后才显示
 - 切换到另一个仓库后，git 区域可能会短暂为空，异步刷新后更新
 - 当前 prompt 结果和异步任务只存在于当前 shell 内存中，不会跨终端共享
+- worker 通信用 `${TMPDIR:-/tmp}` 下的短生命周期 FIFO/result 文件，完成或取消后会清理
 - 如果你使用“复制文件”安装方式，仓库里的后续修改不会自动同步到 `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
 ## 许可证

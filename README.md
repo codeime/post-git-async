@@ -68,6 +68,7 @@ ln -s /path/to/posh-git-async ~/.oh-my-zsh/custom/plugins/posh-git-async
 mkdir -p ~/.oh-my-zsh/custom/plugins/posh-git-async
 cp /path/to/posh-git-async/posh-git-async.plugin.zsh ~/.oh-my-zsh/custom/plugins/posh-git-async/
 cp /path/to/posh-git-async/README.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
+cp /path/to/posh-git-async/README.zh-CN.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
 cp /path/to/posh-git-async/LICENSE ~/.oh-my-zsh/custom/plugins/posh-git-async/
 ```
 
@@ -180,6 +181,16 @@ Notes:
 source ~/.zshrc
 ```
 
+**Optional: compile the plugin for faster shell loading**
+
+If you often open many new terminals, you can compile the installed plugin file locally:
+
+```bash
+zcompile ~/.oh-my-zsh/custom/plugins/posh-git-async/posh-git-async.plugin.zsh
+```
+
+This creates `posh-git-async.plugin.zsh.zwc` next to the plugin file. It only improves zsh parsing/loading time; Git status collection still depends on repository size and Git command cost. Re-run `zcompile` after updating the plugin file. Do not commit `.zwc` files to this repository.
+
 ## Requirements
 
 - zsh 4.3.11 or newer, with `zle -F` support
@@ -265,7 +276,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 **Impact:**
 
-- Advantage: the design stays simple, avoids temp files, and does not introduce cross-terminal cache consistency issues
+- Advantage: the design stays simple, keeps cache state in memory, and does not introduce cross-terminal cache consistency issues
 - Limitation: if you open many terminals in the same large repository, each terminal still runs its own background Git queries
 
 ## Notes
@@ -273,6 +284,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 - Git information is empty when the terminal first opens, and appears after the first async refresh completes
 - After switching to another repository, the Git section may be empty briefly until the async refresh updates it
 - Prompt state and async tasks exist only in the current shell process and are not shared across terminals
+- Worker IPC uses short-lived FIFO/result files under `${TMPDIR:-/tmp}` and removes them after completion or cancellation
 - If you install by copying files instead of using a symlink, later changes in this repository will not be synced automatically into `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
 ## License
