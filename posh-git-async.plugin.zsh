@@ -65,16 +65,45 @@ __posh_git_ps1 ()
     fi
 }
 
-__posh_color () {
+__posh_color_value () {
     if [ -n "$ZSH_VERSION" ]; then
-        echo %{$1%}
+        REPLY="%{$1%}"
     elif [ -n "$BASH_VERSION" ]; then
-        echo \\[$1\\]
+        REPLY="\\[$1\\]"
     else
         # assume Bash anyway
-        echo \\[$1\\]
+        REPLY="\\[$1\\]"
     fi
 }
+
+__posh_color () {
+    __posh_color_value "$1"
+    echo "$REPLY"
+}
+
+__posh_init_color_values () {
+    if [ -n "$ZSH_VERSION" ]; then
+        __POSH_COLOR_DEFAULT='%{\e[m%}'
+        __POSH_COLOR_RED='%{\033[0;31m%}'
+        __POSH_COLOR_GREEN='%{\033[0;32m%}'
+        __POSH_COLOR_BRIGHT_RED='%{\033[0;91m%}'
+        __POSH_COLOR_BRIGHT_GREEN='%{\033[0;92m%}'
+        __POSH_COLOR_BRIGHT_YELLOW='%{\033[0;93m%}'
+        __POSH_COLOR_BRIGHT_CYAN='%{\033[0;96m%}'
+        __POSH_COLOR_RESET='%{\e[0m%}'
+    else
+        __POSH_COLOR_DEFAULT='\[\e[m\]'
+        __POSH_COLOR_RED='\[\033[0;31m\]'
+        __POSH_COLOR_GREEN='\[\033[0;32m\]'
+        __POSH_COLOR_BRIGHT_RED='\[\033[0;91m\]'
+        __POSH_COLOR_BRIGHT_GREEN='\[\033[0;92m\]'
+        __POSH_COLOR_BRIGHT_YELLOW='\[\033[0;93m\]'
+        __POSH_COLOR_BRIGHT_CYAN='\[\033[0;96m\]'
+        __POSH_COLOR_RESET='\[\e[0m\]'
+    fi
+}
+
+__posh_init_color_values
 
 __posh_git () {
     GIT_OPTIONAL_LOCKS=0 command git "$@"
@@ -129,6 +158,7 @@ __posh_git_supports_show_stash () {
 
 __posh_git_stash_info () {
     local stash_count
+    local stash_entry
 
     if stash_count=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null); then
         stash_count=${stash_count:-0}
@@ -145,9 +175,16 @@ __posh_git_stash_info () {
         return 0
     }
 
-    stash_count=$(__posh_git rev-list --walk-reflogs --count refs/stash 2>/dev/null)
-    stash_count=${stash_count:-0}
-    echo "true:$stash_count"
+    stash_count=0
+    while IFS= read -r stash_entry; do
+        [ -n "$stash_entry" ] && (( stash_count++ ))
+    done < <(__posh_git rev-list --walk-reflogs refs/stash 2>/dev/null)
+
+    if [ "$stash_count" -gt 0 ] 2>/dev/null; then
+        echo "true:$stash_count"
+    else
+        echo "true:1"
+    fi
 }
 
 __posh_git_describe_detached () {
@@ -256,7 +293,7 @@ __posh_git_parse_bool () {
 }
 
 __posh_git_load_config () {
-    local config_output=
+    local config_record=
     local config_key=
     local config_value=
 
@@ -266,9 +303,12 @@ __posh_git_load_config () {
     __POSH_CFG_SHOW_STATUS_WHEN_ZERO=false
     __POSH_CFG_ENABLE_STASH_STATUS=true
     __POSH_CFG_ENABLE_STATUS_SYMBOL=true
+    __POSH_CFG_CUSTOM_UPSTREAM=false
 
-    config_output=$(__posh_git config -z --get-regexp '^bash\.(enablegitstatus|branchbehindandaheaddisplay|enablefilestatus|showstatuswhenzero|enablestashstatus|enablestatussymbol)$' 2>/dev/null | tr '\0' '\n')
-    while IFS= read -r config_key && IFS= read -r config_value; do
+    while IFS= read -r -d '' config_record; do
+        config_key=${config_record%%$'\n'*}
+        config_value=${config_record#*$'\n'}
+        [ "$config_key" = "$config_record" ] && config_value=
         case "$config_key" in
             bash.enablegitstatus)
                 __posh_git_parse_bool "$config_value" true
@@ -293,8 +333,11 @@ __posh_git_load_config () {
                 __posh_git_parse_bool "$config_value" true
                 __POSH_CFG_ENABLE_STATUS_SYMBOL=$REPLY
                 ;;
+            bash.showupstream | svn-remote.*.url)
+                __POSH_CFG_CUSTOM_UPSTREAM=true
+                ;;
         esac
-    done <<< "$config_output"
+    done < <(__posh_git config -z --get-regexp '^(bash\.(enablegitstatus|branchbehindandaheaddisplay|enablefilestatus|showstatuswhenzero|enablestashstatus|enablestatussymbol|showupstream)|svn-remote\..*\.url)$' 2>/dev/null)
 }
 
 __posh_git_detect_rebase_state () {
@@ -437,7 +480,9 @@ __posh_git_collect_status_v2 () {
         fi
     fi
 
-    if ! $has_upstream; then
+    if $__POSH_CFG_CUSTOM_UPSTREAM; then
+        __posh_git_update_divergence_state
+    elif ! $has_upstream; then
         __POSH_STATE_DIVERGENCE_RETURN_CODE=1
     fi
 
@@ -515,55 +560,15 @@ __posh_git_collect_prompt_state () {
 }
 
 __posh_git_render_prompt () {
-    local Red='\033[0;31m'
-    local Green='\033[0;32m'
-    local BrightRed='\033[0;91m'
-    local BrightGreen='\033[0;92m'
-    local BrightYellow='\033[0;93m'
-    local BrightCyan='\033[0;96m'
-
-    local DefaultForegroundColor=$(__posh_color '\e[m') # Default no color
-    local DefaultBackgroundColor=
-
     local BeforeText='['
-    local BeforeForegroundColor=$(__posh_color $BrightYellow) # Yellow
-    local BeforeBackgroundColor=
     local DelimText=' |'
-    local DelimForegroundColor=$(__posh_color $BrightYellow) # Yellow
-    local DelimBackgroundColor=
-
     local AfterText=']'
-    local AfterForegroundColor=$(__posh_color $BrightYellow) # Yellow
-    local AfterBackgroundColor=
-
-    local BranchForegroundColor=$(__posh_color $BrightCyan)  # Cyan
-    local BranchBackgroundColor=
-    local BranchAheadForegroundColor=$(__posh_color $BrightGreen) # Green
-    local BranchAheadBackgroundColor=
-    local BranchBehindForegroundColor=$(__posh_color $BrightRed) # Red
-    local BranchBehindBackgroundColor=
-    local BranchBehindAndAheadForegroundColor=$(__posh_color $BrightYellow) # Yellow
-    local BranchBehindAndAheadBackgroundColor=
-
-    local IndexForegroundColor=$(__posh_color $Green) # Dark green
-    local IndexBackgroundColor=
-
-    local WorkingForegroundColor=$(__posh_color $Red) # Dark red
-    local WorkingBackgroundColor=
-
-    local StashForegroundColor=$(__posh_color $BrightRed) # Red
-    local StashBackgroundColor=
     local BeforeStash='('
     local AfterStash=')'
 
     local LocalDefaultStatusSymbol=''
     local LocalWorkingStatusSymbol=' !'
-    local LocalWorkingStatusColor=$(__posh_color "$Red")
     local LocalStagedStatusSymbol=' ~'
-    local LocalStagedStatusColor=$(__posh_color "$BrightCyan")
-
-    local RebaseForegroundColor=$(__posh_color '\e[0m') # reset
-    local RebaseBackgroundColor=
 
     local BranchIdenticalStatusSymbol=''
     local BranchAheadStatusSymbol=''
@@ -582,10 +587,10 @@ __posh_git_render_prompt () {
     local gitstring=
     local branchstring="$__POSH_STATE_IS_BARE${__POSH_STATE_BRANCH##refs/heads/}"
 
-    gitstring="$BeforeBackgroundColor$BeforeForegroundColor$BeforeText"
+    gitstring="$__POSH_COLOR_BRIGHT_YELLOW$BeforeText"
 
     if (( $__POSH_BRANCH_BEHIND_BY > 0 && $__POSH_BRANCH_AHEAD_BY > 0 )); then
-        gitstring+="$BranchBehindAndAheadBackgroundColor$BranchBehindAndAheadForegroundColor$branchstring"
+        gitstring+="$__POSH_COLOR_BRIGHT_YELLOW$branchstring"
         if [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "full" ]; then
             gitstring+="$BranchBehindStatusSymbol$__POSH_BRANCH_BEHIND_BY$BranchAheadStatusSymbol$__POSH_BRANCH_AHEAD_BY"
         elif [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "compact" ]; then
@@ -594,78 +599,83 @@ __posh_git_render_prompt () {
             gitstring+=" $BranchBehindAndAheadStatusSymbol"
         fi
     elif (( $__POSH_BRANCH_BEHIND_BY > 0 )); then
-        gitstring+="$BranchBehindBackgroundColor$BranchBehindForegroundColor$branchstring"
+        gitstring+="$__POSH_COLOR_BRIGHT_RED$branchstring"
         if [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "full" -o "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "compact" ]; then
             gitstring+="$BranchBehindStatusSymbol$__POSH_BRANCH_BEHIND_BY"
         else
             gitstring+="$BranchBehindStatusSymbol"
         fi
     elif (( $__POSH_BRANCH_AHEAD_BY > 0 )); then
-        gitstring+="$BranchAheadBackgroundColor$BranchAheadForegroundColor$branchstring"
+        gitstring+="$__POSH_COLOR_BRIGHT_GREEN$branchstring"
         if [ "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "full" -o "$__POSH_CFG_BRANCH_BEHIND_AND_AHEAD_DISPLAY" = "compact" ]; then
             gitstring+="$BranchAheadStatusSymbol$__POSH_BRANCH_AHEAD_BY"
         else
             gitstring+="$BranchAheadStatusSymbol"
         fi
     elif (( $__POSH_STATE_DIVERGENCE_RETURN_CODE )); then
-        gitstring+="$BranchBackgroundColor$BranchForegroundColor$branchstring$BranchWarningStatusSymbol"
+        gitstring+="$__POSH_COLOR_BRIGHT_CYAN$branchstring$BranchWarningStatusSymbol"
     else
-        gitstring+="$BranchBackgroundColor$BranchForegroundColor$branchstring$BranchIdenticalStatusSymbol"
+        gitstring+="$__POSH_COLOR_BRIGHT_CYAN$branchstring$BranchIdenticalStatusSymbol"
     fi
 
-    gitstring+="${__POSH_STATE_REBASE:+$RebaseForegroundColor$RebaseBackgroundColor$__POSH_STATE_REBASE}"
+    gitstring+="${__POSH_STATE_REBASE:+$__POSH_COLOR_RESET$__POSH_STATE_REBASE}"
 
     if $__POSH_CFG_ENABLE_FILE_STATUS; then
         local indexCount="$(( __POSH_INDEX_ADDED + __POSH_INDEX_MODIFIED + __POSH_INDEX_DELETED + __POSH_INDEX_UNMERGED ))"
         local workingCount="$(( __POSH_FILES_ADDED + __POSH_FILES_MODIFIED + __POSH_FILES_DELETED + __POSH_FILES_UNMERGED ))"
         local localStatusSymbol=$LocalDefaultStatusSymbol
-        local localStatusColor=$DefaultForegroundColor
+        local localStatusColor=$__POSH_COLOR_DEFAULT
 
         if (( indexCount != 0 )) || $__POSH_CFG_SHOW_STATUS_WHEN_ZERO; then
-            gitstring+="$IndexBackgroundColor$IndexForegroundColor +$__POSH_INDEX_ADDED ~$__POSH_INDEX_MODIFIED -$__POSH_INDEX_DELETED"
+            gitstring+="$__POSH_COLOR_GREEN +$__POSH_INDEX_ADDED ~$__POSH_INDEX_MODIFIED -$__POSH_INDEX_DELETED"
         fi
         if (( $__POSH_INDEX_UNMERGED != 0 )); then
-            gitstring+=" $IndexBackgroundColor$IndexForegroundColor!$__POSH_INDEX_UNMERGED"
+            gitstring+=" $__POSH_COLOR_GREEN!$__POSH_INDEX_UNMERGED"
         fi
         if (( indexCount != 0 && (workingCount != 0 || $__POSH_CFG_SHOW_STATUS_WHEN_ZERO) )); then
-            gitstring+="$DelimBackgroundColor$DelimForegroundColor$DelimText"
+            gitstring+="$__POSH_COLOR_BRIGHT_YELLOW$DelimText"
         fi
         if (( workingCount != 0 )) || $__POSH_CFG_SHOW_STATUS_WHEN_ZERO; then
-            gitstring+="$WorkingBackgroundColor$WorkingForegroundColor +$__POSH_FILES_ADDED ~$__POSH_FILES_MODIFIED -$__POSH_FILES_DELETED"
+            gitstring+="$__POSH_COLOR_RED +$__POSH_FILES_ADDED ~$__POSH_FILES_MODIFIED -$__POSH_FILES_DELETED"
         fi
         if (( $__POSH_FILES_UNMERGED != 0 )); then
-            gitstring+=" $WorkingBackgroundColor$WorkingForegroundColor!$__POSH_FILES_UNMERGED"
+            gitstring+=" $__POSH_COLOR_RED!$__POSH_FILES_UNMERGED"
         fi
 
         if (( workingCount != 0 )); then
             localStatusSymbol=$LocalWorkingStatusSymbol
-            localStatusColor=$LocalWorkingStatusColor
+            localStatusColor=$__POSH_COLOR_RED
         elif (( indexCount != 0 )); then
             localStatusSymbol=$LocalStagedStatusSymbol
-            localStatusColor=$LocalStagedStatusColor
+            localStatusColor=$__POSH_COLOR_BRIGHT_CYAN
         fi
 
-        gitstring+="$DefaultBackgroundColor$localStatusColor$localStatusSymbol$DefaultForegroundColor"
+        gitstring+="$localStatusColor$localStatusSymbol$__POSH_COLOR_DEFAULT"
 
         if $__POSH_CFG_ENABLE_STASH_STATUS && $__POSH_STATE_HAS_STASH; then
-            gitstring+="$DefaultBackgroundColor$DefaultForegroundColor $StashBackgroundColor$StashForegroundColor$BeforeStash$__POSH_STATE_STASH_COUNT$AfterStash"
+            gitstring+="$__POSH_COLOR_DEFAULT $__POSH_COLOR_BRIGHT_RED$BeforeStash$__POSH_STATE_STASH_COUNT$AfterStash"
         fi
     fi
 
-    gitstring+="$AfterBackgroundColor$AfterForegroundColor$AfterText$DefaultBackgroundColor$DefaultForegroundColor"
+    gitstring+="$__POSH_COLOR_BRIGHT_YELLOW$AfterText$__POSH_COLOR_DEFAULT"
     echo "$gitstring"
 }
 
 # Echoes the git status string.
 __posh_git_echo_sync () {
+    __posh_git_load_config
+    __posh_git_echo_sync_loaded_config
+}
+
+__posh_git_echo_sync_loaded_config () {
     local g
 
-    __posh_git_load_config
     if ! $__POSH_CFG_ENABLE_GIT_STATUS; then
         return
     fi
 
-    g=$(__posh_gitdir)
+    __posh_gitdir_value
+    g=$REPLY
     if [ -z "$g" ]; then
         return
     fi
@@ -675,41 +685,55 @@ __posh_git_echo_sync () {
 }
 
 # Returns the location of the .git/ directory.
+__posh_gitdir_value ()
+{
+    REPLY=
+    if [ -z "${1-}" ]; then
+        if [ -n "${__posh_git_dir-}" ]; then
+            REPLY=$__posh_git_dir
+        elif [ -n "${GIT_DIR-}" ]; then
+            test -d "${GIT_DIR-}" || return 1
+            REPLY=$GIT_DIR
+        elif [ -d .git ]; then
+            REPLY=.git
+        else
+            REPLY=$(__posh_git rev-parse --git-dir 2>/dev/null)
+        fi
+    elif [ -d "$1/.git" ]; then
+        REPLY="$1/.git"
+    else
+        REPLY=$1
+    fi
+    [ -n "$REPLY" ]
+}
+
 __posh_gitdir ()
 {
     # Note: this function is duplicated in git-completion.bash
     # When updating it, make sure you update the other one to match.
-    if [ -z "${1-}" ]; then
-        if [ -n "${__posh_git_dir-}" ]; then
-            echo "$__posh_git_dir"
-        elif [ -n "${GIT_DIR-}" ]; then
-            test -d "${GIT_DIR-}" || return 1
-            echo "$GIT_DIR"
-        elif [ -d .git ]; then
-            echo .git
-        else
-            __posh_git rev-parse --git-dir 2>/dev/null
-        fi
-    elif [ -d "$1/.git" ]; then
-        echo "$1/.git"
-    else
-        echo "$1"
-    fi
+    __posh_gitdir_value "$@" && echo "$REPLY"
 }
 
 # Updates the global variables `__POSH_BRANCH_AHEAD_BY` and `__POSH_BRANCH_BEHIND_BY`.
 __posh_git_ps1_upstream_divergence ()
 {
     local key value
+    local config_record
     local svn_remote svn_url_pattern
     local upstream=git          # default
     local legacy=''
+    local return_code=
 
     svn_remote=()
+    __POSH_BRANCH_AHEAD_BY=0
+    __POSH_BRANCH_BEHIND_BY=0
+
     local _show_upstream_configured=false
     # get some config options from git-config
-    local output="$(__posh_git config -z --get-regexp '^(svn-remote\..*\.url|bash\.showUpstream)$' 2>/dev/null | tr '\0\n' '\n ')"
-    while read -r key value; do
+    while IFS= read -r -d '' config_record; do
+        key=${config_record%%$'\n'*}
+        value=${config_record#*$'\n'}
+        [ "$key" = "$config_record" ] && value=
         case "$key" in
         bash.showupstream)
             GIT_PS1_SHOWUPSTREAM="$value"
@@ -721,7 +745,7 @@ __posh_git_ps1_upstream_divergence ()
             upstream=svn+git # default upstream is SVN if available, else git
             ;;
         esac
-    done <<< "$output"
+    done < <(__posh_git config -z --get-regexp '^(svn-remote\..*\.url|bash\.showUpstream)$' 2>/dev/null)
 
     if $_show_upstream_configured && [ -z "${GIT_PS1_SHOWUPSTREAM}" ]; then
         return
@@ -764,9 +788,6 @@ __posh_git_ps1_upstream_divergence ()
         ;;
     esac
 
-    local return_code=
-    __POSH_BRANCH_AHEAD_BY=0
-    __POSH_BRANCH_BEHIND_BY=0
     # Find how many commits we are ahead/behind our upstream
     if [ -z "$legacy" ]; then
         local output=
@@ -801,9 +822,12 @@ _posh_git_result_key=""
 _posh_git_job_pid=0
 _posh_git_fd=-1
 _posh_git_job_key=""
+_posh_git_result_file=""
 _posh_git_display_key=""
 _posh_git_refresh_pending=false
 _posh_git_refresh_deferred=false
+_posh_git_enable_status_hint=true
+_posh_git_enable_status_hint_loaded=false
 typeset -gF _posh_git_job_started_at=0
 typeset -gF _posh_git_last_refresh_at=0
 typeset -gF _posh_git_last_completed_at=0
@@ -813,26 +837,74 @@ _posh_git_last_completed_key=""
 : ${POSH_GIT_ASYNC_TIMEOUT_SECONDS:=5}
 
 _posh_git_repo_key() {
-    local g=$(__posh_gitdir)
-    [ -z "$g" ] && return
-    print -r -- "${g:A}"
+    REPLY=
+    __posh_gitdir_value || return
+    REPLY="${REPLY:A}"
 }
 
 _posh_git_now() {
     print -r -- "${EPOCHREALTIME:-0}"
 }
 
+_posh_git_load_enable_status_hint() {
+    local config_output=
+    local config_scope=
+    local config_status=
+    local config_value=
+
+    if [ "$_posh_git_enable_status_hint_loaded" = true ]; then
+        return
+    fi
+
+    _posh_git_enable_status_hint=true
+
+    config_output=$(__posh_git config --show-scope --get bash.enableGitStatus 2>/dev/null)
+    config_status=$?
+    if [ -n "$config_output" ]; then
+        IFS=$' \t' read -r config_scope config_value <<< "$config_output"
+        __posh_git_parse_bool "$config_value" true
+        _posh_git_enable_status_hint=$REPLY
+        if $_posh_git_enable_status_hint; then
+            case "$config_scope" in
+                local | worktree)
+                    ;;
+                *)
+                    _posh_git_enable_status_hint_loaded=true
+                    ;;
+            esac
+        fi
+        return
+    fi
+
+    if (( config_status == 1 )); then
+        _posh_git_enable_status_hint_loaded=true
+        return
+    fi
+
+    config_value=$(__posh_git config --get bash.enableGitStatus 2>/dev/null)
+    if [ -n "$config_value" ]; then
+        __posh_git_parse_bool "$config_value" true
+        _posh_git_enable_status_hint=$REPLY
+        $_posh_git_enable_status_hint && _posh_git_enable_status_hint_loaded=true
+        return
+    fi
+
+    _posh_git_enable_status_hint_loaded=true
+}
+
 _posh_git_cancel_job() {
     if (( _posh_git_job_pid )); then
-        kill $_posh_git_job_pid 2>/dev/null
+        kill -TERM -- -$_posh_git_job_pid 2>/dev/null || kill $_posh_git_job_pid 2>/dev/null
     fi
     if (( _posh_git_fd >= 0 )); then
         zle -F $_posh_git_fd 2>/dev/null
         exec {_posh_git_fd}<&-
     fi
+    [ -n "$_posh_git_result_file" ] && command rm -f "$_posh_git_result_file"
     _posh_git_job_pid=0
     _posh_git_fd=-1
     _posh_git_job_key=""
+    _posh_git_result_file=""
     _posh_git_refresh_pending=false
     _posh_git_refresh_deferred=false
     _posh_git_job_started_at=0
@@ -840,10 +912,51 @@ _posh_git_cancel_job() {
 
 _posh_git_start_job() {
     local job_key=$1
-    exec {_posh_git_fd}< <(print -r -- "$job_key"; __posh_git_echo_sync 2>/dev/null; echo)
+    local fifo=
+    local fifo_base="${TMPDIR:-/tmp}/posh-git-async.$$"
+    local fifo_attempt=0
+    local result_file=
+
+    setopt localoptions nobgnice nomonitor
+
+    while (( fifo_attempt < 5 )); do
+        fifo="${fifo_base}.${RANDOM}.${fifo_attempt}.fifo"
+        if (umask 077 && command mkfifo "$fifo") 2>/dev/null; then
+            break
+        fi
+        fifo=
+        (( fifo_attempt++ ))
+    done
+    [ -z "$fifo" ] && return 1
+    result_file="${fifo}.result"
+    if ! (umask 077 && : > "$result_file") 2>/dev/null; then
+        command rm -f "$fifo"
+        return 1
+    fi
+
+    {
+        local next_result
+        __posh_git_echo_sync_loaded_config > "$result_file" 2>/dev/null
+        printf '%s\n' "$job_key"
+        if IFS= read -r next_result < "$result_file"; then
+            printf '%s\n' "$next_result"
+        else
+            printf '\n'
+        fi
+        command rm -f "$result_file"
+    } > "$fifo" &!
     _posh_git_job_pid=$!
+    if ! exec {_posh_git_fd}< "$fifo"; then
+        kill -TERM -- -$_posh_git_job_pid 2>/dev/null || kill $_posh_git_job_pid 2>/dev/null
+        _posh_git_job_pid=0
+        command rm -f "$fifo"
+        command rm -f "$result_file"
+        return 1
+    fi
+    command rm -f "$fifo"
     _posh_git_job_key=$job_key
-    _posh_git_job_started_at=$(_posh_git_now)
+    _posh_git_result_file=$result_file
+    _posh_git_job_started_at=${EPOCHREALTIME:-0}
     _posh_git_last_refresh_at=$_posh_git_job_started_at
     zle -F $_posh_git_fd _posh_git_on_ready
 }
@@ -861,8 +974,8 @@ _posh_git_on_ready() {
     local now
     local should_reset=false
 
-    IFS= read -r -u $fd result_key
-    IFS= read -r -u $fd next_result
+    IFS= read -r -u $fd result_key || result_key=
+    IFS= read -r -u $fd next_result || next_result=
     zle -F $fd
     exec {fd}<&-
     # Only clear the job pid when the completed fd matches the current one,
@@ -871,9 +984,11 @@ _posh_git_on_ready() {
         _posh_git_job_pid=0
         _posh_git_fd=-1
         _posh_git_job_key=""
+        _posh_git_result_file=""
         _posh_git_job_started_at=0
     fi
-    now=$(_posh_git_now)
+    [ -z "$result_key" ] && return
+    now=${EPOCHREALTIME:-0}
     _posh_git_last_completed_at=$now
     _posh_git_last_completed_key=$result_key
 
@@ -901,23 +1016,49 @@ _posh_git_on_ready() {
 }
 
 _posh_git_async_refresh() {
-    local next_key=$(_posh_git_repo_key)
-    local now=$(_posh_git_now)
-    _posh_git_display_key=$next_key
+    local next_key
+    local now
 
-    if [ -z "$next_key" ]; then
+    _posh_git_load_enable_status_hint
+    if ! $_posh_git_enable_status_hint; then
+        _posh_git_display_key=""
         _posh_git_cancel_job
         _posh_git_result=""
         _posh_git_result_key=""
+        _posh_git_last_completed_key=""
+        return
+    fi
+
+    _posh_git_repo_key
+    next_key=$REPLY
+    if [ -z "$next_key" ]; then
+        _posh_git_display_key=""
+        _posh_git_cancel_job
+        _posh_git_result=""
+        _posh_git_result_key=""
+        _posh_git_last_completed_key=""
         _posh_git_refresh_deferred=false
         return
     fi
+
+    __posh_git_load_config
+    if ! $__POSH_CFG_ENABLE_GIT_STATUS; then
+        _posh_git_display_key=""
+        _posh_git_cancel_job
+        _posh_git_result=""
+        _posh_git_result_key=""
+        _posh_git_last_completed_key=""
+        return
+    fi
+
+    now=${EPOCHREALTIME:-0}
+    _posh_git_display_key=$next_key
 
     if [ "$next_key" != "$_posh_git_result_key" ]; then
         _posh_git_result=""
     fi
 
-    if (( _posh_git_job_pid )); then
+    if (( _posh_git_fd >= 0 )); then
         if (( now > 0 )) && (( _posh_git_job_started_at > 0 )) && (( now - _posh_git_job_started_at >= POSH_GIT_ASYNC_TIMEOUT_SECONDS )); then
             _posh_git_cancel_job
         elif [ "$_posh_git_job_key" = "$next_key" ]; then
