@@ -67,9 +67,6 @@ ln -s /path/to/posh-git-async ~/.oh-my-zsh/custom/plugins/posh-git-async
 # Option 3: copy files directly (without a symlink)
 mkdir -p ~/.oh-my-zsh/custom/plugins/posh-git-async
 cp /path/to/posh-git-async/posh-git-async.plugin.zsh ~/.oh-my-zsh/custom/plugins/posh-git-async/
-cp /path/to/posh-git-async/README.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
-cp /path/to/posh-git-async/README.zh-CN.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
-cp /path/to/posh-git-async/LICENSE ~/.oh-my-zsh/custom/plugins/posh-git-async/
 ```
 
 **2. Update `~/.zshrc`**
@@ -181,15 +178,17 @@ Notes:
 source ~/.zshrc
 ```
 
-**Optional: compile the plugin for faster shell loading**
+**Optional: precompile the plugin for faster shell loading**
 
-If you often open many new terminals, you can compile the installed plugin file locally:
+If you often open many new terminals, you can ask zsh to precompile the installed plugin file:
 
 ```bash
 zcompile ~/.oh-my-zsh/custom/plugins/posh-git-async/posh-git-async.plugin.zsh
 ```
 
-This creates `posh-git-async.plugin.zsh.zwc` next to the plugin file. It only improves zsh parsing/loading time; Git status collection still depends on repository size and Git command cost. Re-run `zcompile` after updating the plugin file. Do not commit `.zwc` files to this repository.
+This creates `posh-git-async.plugin.zsh.zwc` next to the plugin file. The `.zwc` file is zsh wordcode: it is not machine code, not a standalone executable, and not useful to bash. It only reduces zsh parsing/loading work; Git status collection still depends on repository size and Git command cost.
+
+Re-run `zcompile` after updating `posh-git-async.plugin.zsh`. Do not commit `.zwc` files to this repository.
 
 ## Requirements
 

@@ -67,9 +67,6 @@ ln -s /path/to/posh-git-async ~/.oh-my-zsh/custom/plugins/posh-git-async
 # 方式三：直接复制文件（不使用软链）
 mkdir -p ~/.oh-my-zsh/custom/plugins/posh-git-async
 cp /path/to/posh-git-async/posh-git-async.plugin.zsh ~/.oh-my-zsh/custom/plugins/posh-git-async/
-cp /path/to/posh-git-async/README.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
-cp /path/to/posh-git-async/README.zh-CN.md ~/.oh-my-zsh/custom/plugins/posh-git-async/
-cp /path/to/posh-git-async/LICENSE ~/.oh-my-zsh/custom/plugins/posh-git-async/
 ```
 
 **2. 修改 `~/.zshrc`**
@@ -181,15 +178,17 @@ POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
 source ~/.zshrc
 ```
 
-**可选：编译插件以加快 shell 加载**
+**可选：预编译插件以加快 shell 加载**
 
-如果你经常打开很多新终端，可以在本机对安装后的插件文件做 zsh 字节码编译：
+如果你经常打开很多新终端，可以让 zsh 预编译安装后的插件文件：
 
 ```bash
 zcompile ~/.oh-my-zsh/custom/plugins/posh-git-async/posh-git-async.plugin.zsh
 ```
 
-这会在插件文件旁边生成 `posh-git-async.plugin.zsh.zwc`。它只优化 zsh 解析/加载时间；Git 状态采集仍取决于仓库大小和 Git 命令本身的耗时。每次更新插件文件后都需要重新运行 `zcompile`。不要把 `.zwc` 文件提交到这个仓库。
+这会在插件文件旁边生成 `posh-git-async.plugin.zsh.zwc`。`.zwc` 是 zsh 的 wordcode 文件：它不是机器码，不是独立可执行文件，也不能给 bash 使用。它只减少 zsh 解析/加载脚本的工作；Git 状态采集仍取决于仓库大小和 Git 命令本身的耗时。
+
+每次更新 `posh-git-async.plugin.zsh` 后都需要重新运行 `zcompile`。不要把 `.zwc` 文件提交到这个仓库。
 
 ## 系统要求
 
