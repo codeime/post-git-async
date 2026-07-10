@@ -15,11 +15,19 @@ In short, it converts the git prompt logic from [posh-git-sh](https://github.com
 The current version also includes several hot-path optimizations:
 
 - Prefer a single `git status --porcelain=v2 --branch -z` call to collect branch, ahead/behind, stash, and file status
+- Parse porcelain v2 output with zsh-native NUL splitting instead of a per-record `read` loop
 - Use `GIT_OPTIONAL_LOCKS=0` for all prompt-related Git calls
+- Cache Git capability detection (`porcelain v2` / `--show-stash`) in the parent shell so workers do not re-run `git status -h`
+- Pass the already-resolved absolute gitdir into the worker to avoid a second `rev-parse --git-dir`
+- Skip the extra `rev-parse` repo-context probe when a modern `git status --porcelain=v2` succeeds (bare repos, `.git` directories, and older Git still use the fallback probe)
+- Cache the resolved gitdir per directory so working below the repo root does not fork a `rev-parse` on every prompt
+- Move full `git config` loading into the worker so in-flight/debounce short-circuits skip that cost
+- Cancel timed-out or superseded workers by terminating their process tree, so orphaned `git status` scans do not keep running
 - Reuse the in-flight async task for the same repository inside the current shell instead of restarting background work on rapid consecutive Enter presses
 - Apply a short debounce window to repeated refreshes in the same repository, and schedule at most one extra background refresh when needed
 - Clean up and restart a timed-out background worker on the next refresh so a stuck worker does not occupy the slot forever
 - Avoid redundant `symbolic-ref`, `rev-parse`, and `config` calls on common repository paths whenever possible
+- Expose `POSH_GIT_ASYNC_PROMPT` for themes that want to avoid a `$(__posh_git_echo)` fork on every redraw
 
 ## How It Works
 
@@ -39,6 +47,7 @@ To reduce hot-path cost, the current implementation also:
 
 - Prefers `git status --porcelain=v2 --branch -z`
 - Skips file scanning and uses a lighter branch-status path when `bash.enableFileStatus=false`
+- Skips stash collection when `bash.enableFileStatus=false`, because stash is not rendered on that path
 - Uses a faster stash-count path first and falls back to a compatibility path only if needed
 - Automatically falls back to a compatibility path on older Git versions
 - Clears the display when you leave a Git repository so status from the previous repository does not linger
@@ -109,9 +118,14 @@ Find your theme file, usually under `~/.oh-my-zsh/themes/` or `~/.oh-my-zsh/cust
 # Before
 local git_info='$(git_prompt_info)'
 
-# After
+# After (compatible)
 local git_info='$(__posh_git_echo)'
+
+# Preferred for new themes: expand the cached prompt variable and avoid a fork
+local git_info='${POSH_GIT_ASYNC_PROMPT}'
 ```
+
+`POSH_GIT_ASYNC_PROMPT` is updated by the async refresh hook and follows the same cache rules as `__posh_git_echo` (including clearing when you leave a repository or switch to one whose result is not ready yet). `__posh_git_echo` remains supported for existing themes.
 
 If you already use `ys-my`, you can skip the manual edit and use the bundled theme variant from this repo instead:
 
@@ -126,7 +140,7 @@ Then set this in `~/.zshrc` before reloading your shell:
 ZSH_THEME="ys-new"
 ```
 
-This bundled theme keeps the original `ys-my` layout, uses `$(__posh_git_echo)` for async Git state, and ships with a softer gray timestamp that stays readable on dark terminal themes such as cmux's `Dark Modern`.
+This bundled theme keeps the original `ys-my` layout, uses `${POSH_GIT_ASYNC_PROMPT}` for async Git state, and ships with a softer gray timestamp that stays readable on dark terminal themes such as cmux's `Dark Modern`.
 
 **4. oh-my-zsh's built-in git prompt is disabled by default**
 
@@ -201,6 +215,16 @@ Notes:
 - Newer Git versions will prefer the porcelain v2 path and perform better
 - Older Git versions automatically fall back to a compatibility path, but state collection may be heavier
 
+## Development and Testing
+
+The repository ships a self-contained regression suite:
+
+```bash
+zsh tests/run.zsh
+```
+
+It covers feature-detection caching, stash skipping when file status is disabled, porcelain v2 parsing (rename/untracked counting), bare-repo and `.git`-directory rendering, the gitdir cache, worker cancellation (no orphaned Git processes), and the fifo worker protocol. The suite creates temporary repositories under `mktemp -d` and only ever kills processes it spawned itself.
+
 ## Uninstall
 
 **1. Remove `posh-git-async` from the plugins list in `~/.zshrc`**
@@ -263,7 +287,13 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 ### Why is the prompt faster when file status is disabled
 
-**Explanation:** when you set `git config bash.enableFileStatus false`, the plugin skips `git status` file scanning. It no longer counts staged and unstaged file changes, and keeps lighter prompt information such as branch and ahead/behind. Stash state is still collected on this path, but it is not currently rendered in the prompt when file status is disabled.
+**Explanation:** when you set `git config bash.enableFileStatus false`, the plugin skips `git status` file scanning. It no longer counts staged and unstaged file changes, and keeps lighter prompt information such as branch and ahead/behind. Stash is also skipped on this path because it is not rendered when file status is disabled.
+
+### Large-repository tips
+
+- Raise `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` (for example `0.5` or `1`) if you press Enter rapidly in a huge repo and want fewer background scans
+- Enable Git `core.fsmonitor` / untracked-cache when your Git build supports them
+- If you can live without staged/unstaged counts, set `bash.enableFileStatus=false` for a much lighter refresh
 
 ### Why does the prompt sometimes show the wrong Git status after changing directories
 
@@ -283,7 +313,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 - Git information is empty when the terminal first opens, and appears after the first async refresh completes
 - After switching to another repository, the Git section may be empty briefly until the async refresh updates it
 - Prompt state and async tasks exist only in the current shell process and are not shared across terminals
-- Worker IPC uses short-lived FIFO/result files under `${TMPDIR:-/tmp}` and removes them after completion or cancellation
+- Worker IPC uses short-lived FIFO/result files under `${TMPDIR:-/tmp}` and removes them after completion, cancellation, or shell exit
 - If you install by copying files instead of using a symlink, later changes in this repository will not be synced automatically into `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
 ## License

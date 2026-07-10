@@ -15,11 +15,19 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 当前版本还额外做了几项热路径优化：
 
 - 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
+- 用 zsh 原生 NUL 分割解析 porcelain v2 输出，避免逐条 `read` 循环
 - 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
+- 在父 shell 缓存 Git 能力探测（`porcelain v2` / `--show-stash`），避免每个 worker 重复执行 `git status -h`
+- 把已解析的绝对 gitdir 传给 worker，避免再次 `rev-parse --git-dir`
+- 现代 `git status --porcelain=v2` 成功时跳过额外的 `rev-parse` 仓库上下文探测（bare 仓库、`.git` 目录内、旧版 Git 仍走 fallback 探测）
+- 按目录缓存已解析的 gitdir，在仓库子目录里不再每次 prompt 都 fork 一次 `rev-parse`
+- 将完整 `git config` 读取移入 worker，使 in-flight/debounce 短路不再承担这笔开销
+- 取消超时或过期 worker 时会终止其进程树，避免残留的 `git status` 继续扫描
 - 当前 shell 内会复用同一仓库的 in-flight 异步任务，避免连续回车时重复重启后台查询
 - 同一仓库的连续刷新会做短暂 debounce，并在需要时只补一次后台刷新
 - 后台任务超时后会在下一次刷新时自动回收并重启，避免单个卡住的 worker 长时间占位
 - 常规仓库路径会尽量避免重复的 `symbolic-ref` / `rev-parse` / `config` 调用
+- 提供 `POSH_GIT_ASYNC_PROMPT`，方便新主题避免每次 redraw 都 `$(__posh_git_echo)` 一次 fork
 
 ## 原理
 
@@ -39,6 +47,7 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 
 - 优先走 `git status --porcelain=v2 --branch -z`
 - 当 `bash.enableFileStatus=false` 时，跳过 `git status` 文件扫描，改走更轻的分支状态路径
+- 当 `bash.enableFileStatus=false` 时同时跳过 stash 采集，因为该路径本来就不会渲染 stash
 - stash 状态会优先走一次更快的计数路径，失败时再自动回退到兼容逻辑
 - 在旧版 Git 上自动回退到兼容路径
 - 离开 Git 仓库时清空显示，避免残留上一个仓库的状态
@@ -109,9 +118,14 @@ code --locate-shell-integration-path zsh
 # 改前
 local git_info='$(git_prompt_info)'
 
-# 改后
+# 改后（兼容旧主题）
 local git_info='$(__posh_git_echo)'
+
+# 新主题推荐：直接展开缓存变量，避免每次 fork
+local git_info='${POSH_GIT_ASYNC_PROMPT}'
 ```
+
+`POSH_GIT_ASYNC_PROMPT` 由异步刷新 hook 维护，规则与 `__posh_git_echo` 一致（离开仓库或新仓库结果未就绪时会清空）。现有主题仍可继续使用 `__posh_git_echo`。
 
 如果你本来就在用 `ys-my`，也可以直接使用这个仓库里自带的主题变体，跳过手改系统主题文件：
 
@@ -126,7 +140,7 @@ ln -s /path/to/posh-git-async/themes/ys-new.zsh-theme \
 ZSH_THEME="ys-new"
 ```
 
-这个内置主题会保留原始 `ys-my` 的布局，git 状态直接走 `$(__posh_git_echo)`，并且自带一套更适合深色终端主题（例如 cmux 的 `Dark Modern`）的柔和灰色时间显示。
+这个内置主题会保留原始 `ys-my` 的布局，git 状态直接走 `${POSH_GIT_ASYNC_PROMPT}`，并且自带一套更适合深色终端主题（例如 cmux 的 `Dark Modern`）的柔和灰色时间显示。
 
 **4. oh-my-zsh 内置 git prompt 会默认被插件禁用**
 
@@ -201,6 +215,16 @@ zcompile ~/.oh-my-zsh/custom/plugins/posh-git-async/posh-git-async.plugin.zsh
 - 较新的 Git 版本会优先使用 `porcelain v2` 路径，性能更好
 - 较旧的 Git 版本会自动回退到兼容逻辑，但状态采集可能稍重
 
+## 开发与测试
+
+仓库自带一套独立的回归测试：
+
+```bash
+zsh tests/run.zsh
+```
+
+覆盖内容包括：能力探测缓存、file status 关闭时跳过 stash、porcelain v2 解析（rename/untracked 计数）、bare 仓库与 `.git` 目录内的渲染、gitdir 缓存、worker 取消（无孤儿 Git 进程）以及 fifo worker 协议。测试只在 `mktemp -d` 的临时目录里建仓库，也只会 kill 自己创建的进程。
+
 ## 卸载
 
 **1. 从 `~/.zshrc` 的 plugins 列表中移除 `posh-git-async`**
@@ -263,7 +287,13 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 
 ### 关闭文件状态后为什么 prompt 会更快
 
-**说明**：当你设置 `git config bash.enableFileStatus false` 时，插件当前会跳过 `git status` 文件扫描，不再统计 staged / unstaged 文件数量，prompt 里只保留分支、ahead/behind 等较轻的状态信息。stash 状态在这条路径上仍会被采集，但当前不会渲染到 prompt 中。
+**说明**：当你设置 `git config bash.enableFileStatus false` 时，插件会跳过 `git status` 文件扫描，不再统计 staged / unstaged 文件数量，prompt 里只保留分支、ahead/behind 等较轻的状态信息。这条路径上也不会再采集 stash，因为 file status 关闭时本来就不会渲染 stash。
+
+### 大仓库使用建议
+
+- 如果在超大仓库里频繁回车，可适当提高 `POSH_GIT_ASYNC_DEBOUNCE_SECONDS`（例如 `0.5` 或 `1`），减少后台扫描次数
+- 在 Git 支持时启用 `core.fsmonitor` / untracked-cache
+- 如果不需要 staged/unstaged 计数，可设置 `bash.enableFileStatus=false` 走更轻的刷新路径
 
 ### 切换目录后显示错误的 git 状态
 
@@ -283,7 +313,7 @@ rm -rf ~/.oh-my-zsh/custom/plugins/posh-git-async
 - 首次打开终端时 git 信息为空，第一次异步完成后才显示
 - 切换到另一个仓库后，git 区域可能会短暂为空，异步刷新后更新
 - 当前 prompt 结果和异步任务只存在于当前 shell 内存中，不会跨终端共享
-- worker 通信用 `${TMPDIR:-/tmp}` 下的短生命周期 FIFO/result 文件，完成或取消后会清理
+- worker 通信用 `${TMPDIR:-/tmp}` 下的短生命周期 FIFO/result 文件，完成、取消或 shell 退出时会清理
 - 如果你使用“复制文件”安装方式，仓库里的后续修改不会自动同步到 `~/.oh-my-zsh/custom/plugins/posh-git-async/`
 
 ## 许可证

@@ -14,7 +14,9 @@ YS_VCS_PROMPT_CLEAN=" %{$fg[green]%}o"
 
 # Git info
 # local git_info='$(git_prompt_info)'
-local git_info='$(__posh_git_echo)'
+# Prefer the cached prompt variable to avoid a command-substitution fork on
+# every redraw. __posh_git_echo remains available for older themes.
+local git_info='${POSH_GIT_ASYNC_PROMPT}'
 ZSH_THEME_GIT_PROMPT_PREFIX="${YS_VCS_PROMPT_PREFIX1}git${YS_VCS_PROMPT_PREFIX2}"
 ZSH_THEME_GIT_PROMPT_SUFFIX="$YS_VCS_PROMPT_SUFFIX"
 ZSH_THEME_GIT_PROMPT_DIRTY="$YS_VCS_PROMPT_DIRTY"
@@ -69,7 +71,7 @@ PROMPT="$prompt_newline\
 ${hg_info}\
 ${git_info}\
  \
-%F{241}[%D{%m-%d %H:%M:%S}]%f $exit_code \
+%F{245}[%F{241}%D{%m-%d %H:%M:%S}%F{245}]%f $exit_code \
 $prompt_newline\
 $prompt_end"
 
