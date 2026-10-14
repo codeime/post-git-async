@@ -183,7 +183,7 @@ POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
 Notes:
 
 - `POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false` keeps oh-my-zsh's native `git_prompt_*` helpers, but does not disable this plugin's async refresh hook
-- A larger `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` value reduces background Git queries during rapid Enter presses, but prompt status may update a little later
+- A larger `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` value reduces background Git queries during rapid Enter presses, but prompt status may update a little later. Requests inside the window wait in the background and refresh without another Enter; requests during a worker are coalesced into one follow-up. Debounce waiting does not count toward the worker timeout.
 - `POSH_GIT_ASYNC_TIMEOUT_SECONDS` is mainly a stability guard and usually does not need to be changed
 
 **5. Reload your shell configuration**
@@ -221,9 +221,12 @@ The repository ships a self-contained regression suite:
 
 ```bash
 zsh tests/run.zsh
+python3 tests/pty-refresh.py
 ```
 
 It covers feature-detection caching, stash skipping when file status is disabled, porcelain v2 parsing (rename/untracked counting), bare-repo and `.git`-directory rendering, the gitdir cache, worker cancellation (no orphaned Git processes), and the fifo worker protocol. The suite creates temporary repositories under `mktemp -d` and only ever kills processes it spawned itself.
+
+The Python suite uses real interactive zsh terminals and temporary Git repositories to verify debounce refreshes, commands during a scan, directory/configuration changes, and exit cleanup. It retains transcripts on failure; use `--keep-transcripts` to retain successful runs or `--plugin PATH` to check an installed copy.
 
 ## Uninstall
 

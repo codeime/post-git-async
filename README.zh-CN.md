@@ -183,7 +183,7 @@ POSH_GIT_ASYNC_TIMEOUT_SECONDS=5
 说明：
 
 - `POSH_GIT_ASYNC_DISABLE_OMZ_GIT_PROMPT=false` 会保留 oh-my-zsh 原生 `git_prompt_*` helper，但不会关闭本插件自己的异步刷新 hook
-- `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` 越大，连续快速回车时越省后台 Git 查询，但状态更新可能会略晚一点
+- `POSH_GIT_ASYNC_DEBOUNCE_SECONDS` 越大，连续快速回车时越省后台 Git 查询，但状态更新可能会略晚一点。窗口内的请求会在后台等待后自动刷新，无需再按回车；worker 运行期间的请求合并为一次后续刷新。等待时间不计入 worker 超时。
 - `POSH_GIT_ASYNC_TIMEOUT_SECONDS` 主要是稳定性保护，正常情况下不需要改
 
 **5. 重载配置**
@@ -221,9 +221,12 @@ zcompile ~/.oh-my-zsh/custom/plugins/posh-git-async/posh-git-async.plugin.zsh
 
 ```bash
 zsh tests/run.zsh
+python3 tests/pty-refresh.py
 ```
 
 覆盖内容包括：能力探测缓存、file status 关闭时跳过 stash、porcelain v2 解析（rename/untracked 计数）、bare 仓库与 `.git` 目录内的渲染、gitdir 缓存、worker 取消（无孤儿 Git 进程）以及 fifo worker 协议。测试只在 `mktemp -d` 的临时目录里建仓库，也只会 kill 自己创建的进程。
+
+Python 测试通过真实交互式 zsh 终端和临时 Git 仓库验证防抖刷新、扫描期间的命令、目录与配置切换，以及退出清理。失败时保留终端记录；可用 `--keep-transcripts` 保留成功记录，或用 `--plugin PATH` 验证已安装副本。
 
 ## 卸载
 

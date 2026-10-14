@@ -950,8 +950,8 @@ _posh_git_enable_status_hint=true
 _posh_git_enable_status_hint_loaded=false
 # Prompt-expandable cache for themes that want to avoid $(__posh_git_echo).
 typeset -g POSH_GIT_ASYNC_PROMPT=""
+# Earliest scan time; debounce waiting does not consume the worker timeout.
 typeset -gF _posh_git_job_started_at=0
-typeset -gF _posh_git_last_refresh_at=0
 typeset -gF _posh_git_last_completed_at=0
 _posh_git_last_completed_key=""
 
@@ -1049,8 +1049,10 @@ _posh_git_load_enable_status_hint() {
     # The uncached states (explicitly disabled, or enabled at local/worktree
     # scope) re-run `git config` so re-enabling takes effect promptly. Within
     # the debounce window in the same directory, reuse the last answer so
-    # rapid Enter presses do not fork repeatedly.
-    if [ "$_posh_git_hint_checked_pwd" = "$PWD" ] \
+    # rapid Enter presses do not fork repeatedly. Only reuse enabled hints:
+    # caching false here would lose a quick command that re-enables status.
+    if [ "$_posh_git_enable_status_hint" = true ] \
+        && [ "$_posh_git_hint_checked_pwd" = "$PWD" ] \
         && (( hint_now > 0 )) && (( _posh_git_hint_checked_at > 0 )) \
         && (( hint_now - _posh_git_hint_checked_at < POSH_GIT_ASYNC_DEBOUNCE_SECONDS )); then
         return
@@ -1189,8 +1191,20 @@ _posh_git_start_job() {
         return 1
     fi
 
+    # Use the same absolute deadline in parent and worker. A request inside
+    # the debounce window must schedule a scan, not disappear until Enter.
+    local -F scan_not_before=${EPOCHREALTIME:-0}
+    if (( scan_not_before > 0 && _posh_git_last_completed_at > 0 )) \
+        && [ "$_posh_git_last_completed_key" = "$job_key" ]; then
+        local -F debounce_until=$(( _posh_git_last_completed_at + POSH_GIT_ASYNC_DEBOUNCE_SECONDS ))
+        (( debounce_until > scan_not_before )) && scan_not_before=$debounce_until
+    fi
+
     {
         local next_result
+        local -F delay=$(( scan_not_before - ${EPOCHREALTIME:-0} ))
+        # The FIFO is opened before this body runs, so only the worker waits.
+        (( delay > 0 )) && command sleep "$delay"
         # Load config inside the worker so in-flight/debounce short-circuits in
         # the parent do not pay for a full git-config scan, and follow-up jobs
         # always see fresh config.
@@ -1220,8 +1234,7 @@ _posh_git_start_job() {
     _posh_git_job_key=$job_key
     _posh_git_job_git_dir=$git_dir
     _posh_git_result_file=$result_file
-    _posh_git_job_started_at=${EPOCHREALTIME:-0}
-    _posh_git_last_refresh_at=$_posh_git_job_started_at
+    _posh_git_job_started_at=$scan_not_before
     zle -F $_posh_git_fd _posh_git_on_ready
 }
 
@@ -1310,26 +1323,17 @@ _posh_git_async_refresh() {
         POSH_GIT_ASYNC_PROMPT=
     fi
 
-    # Short-circuit in-flight / debounce before any heavy config work.
+    # Coalesce all requests during a worker into one follow-up. Even a
+    # waiting worker has inherited an older cwd/environment snapshot.
     if (( _posh_git_fd >= 0 )); then
         if (( now > 0 )) && (( _posh_git_job_started_at > 0 )) && (( now - _posh_git_job_started_at >= POSH_GIT_ASYNC_TIMEOUT_SECONDS )); then
             _posh_git_cancel_job
         elif [ "$_posh_git_job_key" = "$next_key" ]; then
-            if (( now == 0 )) || (( _posh_git_last_refresh_at == 0 )) || (( now - _posh_git_last_refresh_at >= POSH_GIT_ASYNC_DEBOUNCE_SECONDS )); then
-                _posh_git_refresh_pending=true
-                _posh_git_last_refresh_at=$now
-            fi
+            _posh_git_refresh_pending=true
             return
         else
             _posh_git_cancel_job
         fi
-    fi
-
-    if (( now > 0 )) \
-        && (( _posh_git_last_completed_at > 0 )) \
-        && [ "$_posh_git_last_completed_key" = "$next_key" ] \
-        && (( now - _posh_git_last_completed_at < POSH_GIT_ASYNC_DEBOUNCE_SECONDS )); then
-        return
     fi
 
     # Warm feature detection in the parent so workers inherit cached flags and
