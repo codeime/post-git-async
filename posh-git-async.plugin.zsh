@@ -458,7 +458,7 @@ __posh_git_update_divergence_state () {
 
 __posh_git_collect_status_v2 () {
     local g=$1
-    local status_cmd=(status --porcelain=v2 --branch -z)
+    local status_cmd=(status --porcelain=v2 --branch --untracked-files=all -z)
     local status_output=
     local -a status_records=()
     local status_record=
@@ -614,7 +614,7 @@ __posh_git_collect_status_v1 () {
                 esac
                 ;;
         esac
-    done < <(__posh_git status --porcelain=v1 -z 2>/dev/null)
+    done < <(__posh_git status --porcelain=v1 --untracked-files=all -z 2>/dev/null)
 }
 
 __posh_git_collect_prompt_state () {

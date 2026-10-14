@@ -14,7 +14,7 @@ In short, it converts the git prompt logic from [posh-git-sh](https://github.com
 
 The current version also includes several hot-path optimizations:
 
-- Prefer a single `git status --porcelain=v2 --branch -z` call to collect branch, ahead/behind, stash, and file status
+- Prefer a single `git status --porcelain=v2 --branch --untracked-files=all -z` call to collect branch, ahead/behind, stash, and file status; count untracked files individually instead of collapsing directories
 - Parse porcelain v2 output with zsh-native NUL splitting instead of a per-record `read` loop
 - Use `GIT_OPTIONAL_LOCKS=0` for all prompt-related Git calls
 - Cache Git capability detection (`porcelain v2` / `--show-stash`) in the parent shell so workers do not re-run `git status -h`

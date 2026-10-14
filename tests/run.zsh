@@ -119,7 +119,7 @@ abs_gitdir=$(git -C "$repo2" rev-parse --absolute-git-dir)
 assert_eq "echo with explicit gitdir works in subdirectory" OK "$(<"$TMP/sub.out")"
 
 # ---------------------------------------------------------------------------
-# 4) porcelain v2 parser counts untracked and handles rename records
+# 4) porcelain parsers count nested untracked files and handle rename records
 # ---------------------------------------------------------------------------
 repo3=$TMP/repo-parse
 mkdir -p "$repo3"
@@ -129,11 +129,12 @@ git -C "$repo3" config user.name t
 print old > "$repo3/old.txt"
 git -C "$repo3" add old.txt
 git -C "$repo3" commit -qm init
-git -C "$repo3" mv old.txt new.txt
-print u1 > "$repo3/u1.txt"
-print u2 > "$repo3/u2.txt"
+mkdir -p "$repo3/new-dir/nested"
+print u1 > "$repo3/new-dir/nested/u1.txt"
+print u2 > "$repo3/new-dir/nested/u2.txt"
 
-(
+collect_parse_status() {
+    local parser=$1
     cd "$repo3"
     __posh_git_load_config
     __posh_gitdir_value
@@ -144,13 +145,36 @@ print u2 > "$repo3/u2.txt"
     __POSH_BRANCH_AHEAD_BY=0
     __POSH_BRANCH_BEHIND_BY=0
     __posh_git_reset_counters
-    __posh_git_collect_status_v2 "$g"
+    if [ "$parser" = v2 ]; then
+        __posh_git_collect_status_v2 "$g"
+    else
+        __posh_git_collect_status_v1
+    fi
     print -r -- "INDEX_MOD=$__POSH_INDEX_MODIFIED"
     print -r -- "FILES_ADD=$__POSH_FILES_ADDED"
-) > "$TMP/parse.out"
+}
 
-assert_eq "rename counts as index modified" 1 "$(sed -n 's/^INDEX_MOD=//p' "$TMP/parse.out")"
-assert_eq "two untracked files counted" 2 "$(sed -n 's/^FILES_ADD=//p' "$TMP/parse.out")"
+# No rename record: exercise v2's native-array fast path against two files
+# hidden under the same newly created directory.
+(
+    collect_parse_status v2
+) > "$TMP/parse-fast.out"
+assert_eq "v2 fast path counts nested untracked files separately" 2 "$(sed -n 's/^FILES_ADD=//p' "$TMP/parse-fast.out")"
+
+# A real rename forces v2's record loop and remains covered alongside the
+# same nested untracked-file fixture.
+git -C "$repo3" mv old.txt new.txt
+(
+    collect_parse_status v2
+) > "$TMP/parse-rename.out"
+assert_eq "rename counts as index modified" 1 "$(sed -n 's/^INDEX_MOD=//p' "$TMP/parse-rename.out")"
+assert_eq "v2 rename path counts nested untracked files separately" 2 "$(sed -n 's/^FILES_ADD=//p' "$TMP/parse-rename.out")"
+
+# v1 receives the same real repository state and must count each path too.
+(
+    collect_parse_status v1
+) > "$TMP/parse-v1.out"
+assert_eq "v1 counts nested untracked files separately" 2 "$(sed -n 's/^FILES_ADD=//p' "$TMP/parse-v1.out")"
 
 # ---------------------------------------------------------------------------
 # 5) kill_tree terminates worker descendants

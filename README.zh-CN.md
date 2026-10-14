@@ -14,7 +14,7 @@ posh-git-async 是一个 oh-my-zsh 插件，专为在大型 Git 仓库中使用 
 
 当前版本还额外做了几项热路径优化：
 
-- 优先使用一次 `git status --porcelain=v2 --branch -z` 获取分支、ahead/behind、stash 和文件状态
+- 优先使用一次 `git status --porcelain=v2 --branch --untracked-files=all -z` 获取分支、ahead/behind、stash 和文件状态；未跟踪文件逐个计数，不再合并目录
 - 用 zsh 原生 NUL 分割解析 porcelain v2 输出，避免逐条 `read` 循环
 - 所有 prompt 相关 Git 调用统一使用 `GIT_OPTIONAL_LOCKS=0`
 - 在父 shell 缓存 Git 能力探测（`porcelain v2` / `--show-stash`），避免每个 worker 重复执行 `git status -h`
